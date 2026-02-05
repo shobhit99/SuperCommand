@@ -3,6 +3,11 @@
  * 
  * Dynamically discovers ALL installed applications and ALL System Settings
  * panes by scanning the filesystem directly. No hardcoded lists.
+ * 
+ * Icons are extracted using:
+ * 1. sips for .icns files (fast, works for .app bundles)
+ * 2. NSWorkspace via osascript/JXA for bundles without .icns (settings panes)
+ * 3. Persistent disk cache so icons are only extracted once
  */
 
 import { app } from 'electron';
@@ -10,6 +15,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 const execAsync = promisify(exec);
 let iconCounter = 0;
@@ -22,6 +28,8 @@ export interface CommandInfo {
   category: 'app' | 'settings' | 'system';
   /** .app path for apps, bundle identifier for settings */
   path?: string;
+  /** Bundle path on disk (used for icon extraction) */
+  _bundlePath?: string;
 }
 
 // ─── Cache ──────────────────────────────────────────────────────────
@@ -30,7 +38,42 @@ let cachedCommands: CommandInfo[] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 120_000; // 2 min
 
-// ─── Helpers ────────────────────────────────────────────────────────
+// ─── Icon Disk Cache ────────────────────────────────────────────────
+
+let iconCacheDir: string | null = null;
+
+function getIconCacheDir(): string {
+  if (!iconCacheDir) {
+    iconCacheDir = path.join(app.getPath('userData'), 'icon-cache');
+    if (!fs.existsSync(iconCacheDir)) {
+      fs.mkdirSync(iconCacheDir, { recursive: true });
+    }
+  }
+  return iconCacheDir;
+}
+
+function iconCacheKey(bundlePath: string): string {
+  return crypto.createHash('md5').update(bundlePath).digest('hex');
+}
+
+function getCachedIcon(bundlePath: string): string | undefined {
+  try {
+    const cacheFile = path.join(getIconCacheDir(), `${iconCacheKey(bundlePath)}.b64`);
+    if (fs.existsSync(cacheFile)) {
+      return fs.readFileSync(cacheFile, 'utf-8');
+    }
+  } catch {}
+  return undefined;
+}
+
+function setCachedIcon(bundlePath: string, dataUrl: string): void {
+  try {
+    const cacheFile = path.join(getIconCacheDir(), `${iconCacheKey(bundlePath)}.b64`);
+    fs.writeFileSync(cacheFile, dataUrl);
+  } catch {}
+}
+
+// ─── Icon Extraction ────────────────────────────────────────────────
 
 /**
  * Convert an .icns file to a base64 PNG data URL using macOS `sips`.
@@ -56,15 +99,13 @@ async function icnsToPngDataUrl(icnsPath: string): Promise<string | undefined> {
 }
 
 /**
- * Extract the actual icon from a .app / .appex / .prefPane bundle.
- * 1. Reads CFBundleIconFile from Info.plist → converts .icns with sips
- * 2. Searches for common icon filenames in Contents/Resources/
- * 3. Falls back to app.getFileIcon({ size: 'large' })
+ * Extract icon from a bundle via .icns files (fast path).
+ * Returns undefined if no .icns is found.
  */
-async function getIconDataUrl(bundlePath: string): Promise<string | undefined> {
+async function getIconFromIcns(bundlePath: string): Promise<string | undefined> {
   const resourcesDir = path.join(bundlePath, 'Contents', 'Resources');
 
-  // Step 1: Try CFBundleIconFile / CFBundleIconName from Info.plist
+  // Try CFBundleIconFile / CFBundleIconName from Info.plist
   try {
     const plistPath = path.join(bundlePath, 'Contents', 'Info.plist');
     if (fs.existsSync(plistPath)) {
@@ -80,22 +121,17 @@ async function getIconDataUrl(bundlePath: string): Promise<string | undefined> {
         if (!fs.existsSync(icnsPath) && !iconFileName.endsWith('.icns')) {
           icnsPath = path.join(resourcesDir, `${iconFileName}.icns`);
         }
-
         if (fs.existsSync(icnsPath)) {
-          const result = await icnsToPngDataUrl(icnsPath);
-          if (result) return result;
+          return await icnsToPngDataUrl(icnsPath);
         }
       }
     }
-  } catch {
-    // plist read failed — fall through
-  }
+  } catch {}
 
-  // Step 2: Search for common icon filenames in Resources/
+  // Search for common icon filenames in Resources/
   if (fs.existsSync(resourcesDir)) {
     try {
       const files = fs.readdirSync(resourcesDir);
-      // Prefer known icon names first, then any .icns file
       const priorityNames = ['icon.icns', 'AppIcon.icns', 'SharedAppIcon.icns'];
       for (const name of priorityNames) {
         if (files.includes(name)) {
@@ -103,29 +139,128 @@ async function getIconDataUrl(bundlePath: string): Promise<string | undefined> {
           if (result) return result;
         }
       }
-      // Try any .icns file we find
       const anyIcns = files.find((f) => f.endsWith('.icns'));
       if (anyIcns) {
-        const result = await icnsToPngDataUrl(path.join(resourcesDir, anyIcns));
-        if (result) return result;
+        return await icnsToPngDataUrl(path.join(resourcesDir, anyIcns));
       }
-    } catch {
-      // ignore
-    }
-  }
-
-  // Step 3: Fallback — use Electron's getFileIcon
-  try {
-    const icon = await app.getFileIcon(bundlePath, { size: 'large' });
-    if (!icon.isEmpty()) {
-      return icon.toDataURL();
-    }
-  } catch {
-    // ignore
+    } catch {}
   }
 
   return undefined;
 }
+
+/**
+ * Batch-extract icons for bundles that don't have .icns files.
+ * Uses macOS NSWorkspace API via osascript/JXA — gets the real icon for ANY bundle.
+ * Results are written to temp PNGs, resized, and converted to base64 data URLs.
+ */
+async function batchGetIconsViaWorkspace(
+  bundlePaths: string[]
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (bundlePaths.length === 0) return result;
+
+  const tmpDir = path.join(app.getPath('temp'), `launcher-ws-icons-${Date.now()}`);
+  const tmpPathsFile = path.join(app.getPath('temp'), `launcher-icon-paths-${Date.now()}.json`);
+  const tmpScript = path.join(app.getPath('temp'), `launcher-icon-script-${Date.now()}.js`);
+
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(tmpPathsFile, JSON.stringify(bundlePaths));
+
+    // JXA script that uses NSWorkspace.iconForFile to get actual bundle icons
+    const jxaScript = `
+ObjC.import("AppKit");
+ObjC.import("Foundation");
+
+var inputPath = "${tmpPathsFile.replace(/"/g, '\\"')}";
+var outputDir = "${tmpDir.replace(/"/g, '\\"')}";
+
+var data = $.NSData.dataWithContentsOfFile(inputPath);
+var str = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding));
+var paths = JSON.parse(str);
+
+var ws = $.NSWorkspace.sharedWorkspace;
+var results = {};
+
+for (var i = 0; i < paths.length; i++) {
+  try {
+    var p = paths[i];
+    var icon = ws.iconForFile(p);
+    icon.setSize({width: 64, height: 64});
+    var tiffData = icon.TIFFRepresentation;
+    var bitmapRep = $.NSBitmapImageRep.imageRepWithData(tiffData);
+    var pngData = bitmapRep.representationUsingTypeProperties(4, $({}));
+    var outFile = outputDir + "/" + i + ".png";
+    pngData.writeToFileAtomically(outFile, true);
+    results[p] = outFile;
+  } catch(e) {}
+}
+
+var resultStr = $.NSString.alloc.initWithUTF8String(JSON.stringify(results));
+resultStr.writeToFileAtomicallyEncodingError(outputDir + "/map.json", true, 4, null);
+`;
+
+    fs.writeFileSync(tmpScript, jxaScript);
+    await execAsync(`/usr/bin/osascript -l JavaScript "${tmpScript}" 2>/dev/null`);
+
+    // Read the mapping
+    const mapFile = path.join(tmpDir, 'map.json');
+    if (fs.existsSync(mapFile)) {
+      const map: Record<string, string> = JSON.parse(
+        fs.readFileSync(mapFile, 'utf-8')
+      );
+
+      // Resize all PNGs with sips and convert to base64
+      for (const [bundlePath, pngFile] of Object.entries(map)) {
+        try {
+          // Resize to 64x64
+          await execAsync(
+            `/usr/bin/sips -z 64 64 "${pngFile}" --out "${pngFile}" 2>/dev/null`
+          );
+          const pngBuf = fs.readFileSync(pngFile);
+          if (pngBuf.length > 100) {
+            const dataUrl = `data:image/png;base64,${pngBuf.toString('base64')}`;
+            result.set(bundlePath, dataUrl);
+            // Save to disk cache
+            setCachedIcon(bundlePath, dataUrl);
+          }
+        } catch {}
+      }
+    }
+  } catch (error) {
+    console.warn('Batch icon extraction via NSWorkspace failed:', error);
+  } finally {
+    // Cleanup temp files
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    try { fs.unlinkSync(tmpPathsFile); } catch {}
+    try { fs.unlinkSync(tmpScript); } catch {}
+  }
+
+  return result;
+}
+
+/**
+ * Get icon for a single bundle: disk cache → .icns → mark for batch.
+ * Returns the data URL or undefined (meaning needs batch NSWorkspace extraction).
+ */
+async function getIconDataUrl(bundlePath: string): Promise<string | undefined> {
+  // Check disk cache first
+  const cached = getCachedIcon(bundlePath);
+  if (cached) return cached;
+
+  // Try fast .icns extraction
+  const icnsResult = await getIconFromIcns(bundlePath);
+  if (icnsResult) {
+    setCachedIcon(bundlePath, icnsResult);
+    return icnsResult;
+  }
+
+  // No .icns found — will need batch NSWorkspace extraction
+  return undefined;
+}
+
+// ─── Plist / Name Helpers ───────────────────────────────────────────
 
 /**
  * Read a JSON-converted Info.plist and return the whole object.
@@ -146,11 +281,9 @@ async function readPlistJson(
 }
 
 /**
- * Turn "DateAndTime" → "Date & Time", "DesktopScreenEffectsPref" → "Desktop & Screen Effects"
- * Cleans camelCase / PascalCase prefPane names into human-readable titles.
+ * Turn "DateAndTime" → "Date & Time", etc.
  */
 function cleanPaneName(raw: string): string {
-  // Remove known suffixes
   let s = raw
     .replace(/Pref$/, '')
     .replace(/\.prefPane$/, '')
@@ -160,12 +293,9 @@ function cleanPaneName(raw: string): string {
     .replace(/Intents$/, '')
     .replace(/IntentsExtension$/, '');
 
-  // Insert space before uppercase letters that follow lowercase letters: "DateTime" → "Date Time"
   s = s.replace(/([a-z])([A-Z])/g, '$1 $2');
-  // Insert space before uppercase letters that follow other uppercase + lowercase: "HTMLParser" → "HTML Parser"
   s = s.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
 
-  // Known replacements
   const replacements: Record<string, string> = {
     'And': '&',
     'Energy Saver': 'Energy Saver',
@@ -185,10 +315,8 @@ function cleanPaneName(raw: string): string {
     'Digi Hub': 'CDs & DVDs',
   };
 
-  // Replace "And" with "&"
   s = s.replace(/\bAnd\b/g, '&');
 
-  // Apply known full replacements
   for (const [from, to] of Object.entries(replacements)) {
     if (s === from) {
       s = to;
@@ -201,9 +329,6 @@ function cleanPaneName(raw: string): string {
 
 // ─── Application Discovery ──────────────────────────────────────────
 
-/**
- * Scan standard macOS directories for .app bundles.
- */
 async function discoverApplications(): Promise<CommandInfo[]> {
   const results: CommandInfo[] = [];
   const seen = new Set<string>();
@@ -225,7 +350,6 @@ async function discoverApplications(): Promise<CommandInfo[]> {
       continue;
     }
 
-    // Collect .app paths from this directory
     const appPaths: string[] = [];
     for (const entry of entries) {
       if (entry.endsWith('.app')) {
@@ -233,7 +357,6 @@ async function discoverApplications(): Promise<CommandInfo[]> {
       }
     }
 
-    // Process in parallel batches for speed
     const BATCH = 15;
     for (let i = 0; i < appPaths.length; i += BATCH) {
       const batch = appPaths.slice(i, i + BATCH);
@@ -241,8 +364,6 @@ async function discoverApplications(): Promise<CommandInfo[]> {
         batch.map(async (appPath) => {
           const name = path.basename(appPath, '.app');
           const key = name.toLowerCase();
-
-          // Deduplicate
           if (seen.has(key)) return null;
           seen.add(key);
 
@@ -255,6 +376,7 @@ async function discoverApplications(): Promise<CommandInfo[]> {
             iconDataUrl,
             category: 'app' as const,
             path: appPath,
+            _bundlePath: appPath,
           };
         })
       );
@@ -270,29 +392,11 @@ async function discoverApplications(): Promise<CommandInfo[]> {
 
 // ─── System Settings Discovery ──────────────────────────────────────
 
-/**
- * Discover System Settings panes from two sources:
- * 1. .prefPane bundles in /System/Library/PreferencePanes/ (gives us the pane list)
- * 2. .appex extensions in ExtensionKit (gives us display names & bundle IDs for opening)
- */
 async function discoverSystemSettings(): Promise<CommandInfo[]> {
   const results: CommandInfo[] = [];
   const seen = new Set<string>();
 
-  // Get the System Settings app icon (used as fallback when a pane has no icon)
-  let settingsIconDataUrl: string | undefined;
-  for (const p of [
-    '/System/Applications/System Settings.app',
-    '/System/Applications/System Preferences.app',
-  ]) {
-    if (fs.existsSync(p)) {
-      settingsIconDataUrl = await getIconDataUrl(p);
-      break;
-    }
-  }
-
   // ── Source 1: .appex extensions (macOS Ventura+) ──
-  // These have proper Info.plist with display names & bundle IDs
   const extDir = '/System/Library/ExtensionKit/Extensions';
   if (fs.existsSync(extDir)) {
     let files: string[];
@@ -305,13 +409,11 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
     const appexFiles = files.filter(
       (f) =>
         f.endsWith('.appex') &&
-        // Only grab settings-related extensions
         (f.toLowerCase().includes('settings') ||
           f.toLowerCase().includes('preference') ||
           f.toLowerCase().includes('pref'))
     );
 
-    // Also include known settings extensions that don't have "settings" in the name
     const knownSettingsExt = files.filter((f) =>
       [
         'Bluetooth.appex',
@@ -346,7 +448,6 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
             info.CFBundleDisplayName || info.CFBundleName || '';
           const bundleId: string = info.CFBundleIdentifier || '';
 
-          // Skip internal/helper extensions
           if (
             !displayName ||
             displayName.includes('Intents') ||
@@ -358,7 +459,6 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
             return null;
           }
 
-          // Clean up names that still look like code
           if (
             displayName.includes('Extension') ||
             displayName.includes('Settings')
@@ -366,16 +466,14 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
             displayName = cleanPaneName(displayName);
           }
 
-          // Skip if name got too short or empty after cleaning
           if (!displayName || displayName.length < 2) return null;
 
           const key = displayName.toLowerCase();
           if (seen.has(key)) return null;
           seen.add(key);
 
-          // Extract the individual icon for this settings pane
-          const iconDataUrl =
-            (await getIconDataUrl(extPath)) || settingsIconDataUrl;
+          // Try fast .icns extraction (will return undefined for Assets.car-only bundles)
+          const iconDataUrl = await getIconDataUrl(extPath);
 
           return {
             id: `settings-${key.replace(/[^a-z0-9]+/g, '-')}`,
@@ -383,7 +481,8 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
             keywords: ['system settings', 'preferences', key],
             iconDataUrl,
             category: 'settings' as const,
-            path: bundleId, // Store bundle ID for opening
+            path: bundleId,
+            _bundlePath: extPath,
           };
         })
       );
@@ -394,7 +493,7 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
     }
   }
 
-  // ── Source 2: .prefPane bundles (covers older panes & ensures completeness) ──
+  // ── Source 2: .prefPane bundles ──
   const prefDirs = [
     '/System/Library/PreferencePanes',
     '/Library/PreferencePanes',
@@ -426,14 +525,10 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
           const rawName = path.basename(panePath, '.prefPane');
           const displayName = cleanPaneName(rawName);
           const key = displayName.toLowerCase();
-
-          // Skip if we already have this from appex
           if (seen.has(key)) return null;
           seen.add(key);
 
-          // Extract the individual icon for this pref pane
-          const iconDataUrl =
-            (await getIconDataUrl(panePath)) || settingsIconDataUrl;
+          const iconDataUrl = await getIconDataUrl(panePath);
 
           return {
             id: `settings-${key.replace(/[^a-z0-9]+/g, '-')}`,
@@ -441,7 +536,8 @@ async function discoverSystemSettings(): Promise<CommandInfo[]> {
             keywords: ['system settings', 'preferences', key],
             iconDataUrl,
             category: 'settings' as const,
-            path: rawName, // Raw prefPane identifier
+            path: rawName,
+            _bundlePath: panePath,
           };
         })
       );
@@ -462,7 +558,6 @@ async function openAppByPath(appPath: string): Promise<void> {
 }
 
 async function openSettingsPane(identifier: string): Promise<void> {
-  // If it looks like a bundle ID (com.apple.xxx), use the URL scheme directly
   if (identifier.startsWith('com.apple.')) {
     try {
       await execAsync(`open "x-apple.systempreferences:${identifier}"`);
@@ -470,7 +565,6 @@ async function openSettingsPane(identifier: string): Promise<void> {
     } catch { /* fall through */ }
   }
 
-  // Try Ventura-style URL scheme
   try {
     await execAsync(
       `open "x-apple.systempreferences:com.apple.settings.${identifier}"`
@@ -478,7 +572,6 @@ async function openSettingsPane(identifier: string): Promise<void> {
     return;
   } catch { /* fall through */ }
 
-  // Try older preference pane style
   try {
     await execAsync(
       `open "x-apple.systempreferences:com.apple.preference.${identifier.toLowerCase()}"`
@@ -486,7 +579,6 @@ async function openSettingsPane(identifier: string): Promise<void> {
     return;
   } catch { /* fall through */ }
 
-  // Final fallback: just open System Settings
   try {
     await execAsync('open -a "System Settings"');
   } catch {
@@ -514,7 +606,6 @@ export async function getAvailableCommands(): Promise<CommandInfo[]> {
     discoverSystemSettings(),
   ]);
 
-  // Sort alphabetically
   apps.sort((a, b) => a.title.localeCompare(b.title));
   settings.sort((a, b) => a.title.localeCompare(b.title));
 
@@ -527,7 +618,32 @@ export async function getAvailableCommands(): Promise<CommandInfo[]> {
     },
   ];
 
-  cachedCommands = [...apps, ...settings, ...systemCommands];
+  const allCommands = [...apps, ...settings, ...systemCommands];
+
+  // ── Second pass: batch-extract icons for bundles that don't have .icns ──
+  const needsIcon = allCommands.filter(
+    (c) => !c.iconDataUrl && c._bundlePath
+  );
+
+  if (needsIcon.length > 0) {
+    console.log(`Extracting ${needsIcon.length} icons via NSWorkspace…`);
+    const bundlePaths = needsIcon.map((c) => c._bundlePath!);
+    const iconMap = await batchGetIconsViaWorkspace(bundlePaths);
+
+    for (const cmd of needsIcon) {
+      const dataUrl = iconMap.get(cmd._bundlePath!);
+      if (dataUrl) {
+        cmd.iconDataUrl = dataUrl;
+      }
+    }
+  }
+
+  // Clean up internal _bundlePath before caching
+  for (const cmd of allCommands) {
+    delete cmd._bundlePath;
+  }
+
+  cachedCommands = allCommands;
   cacheTimestamp = now;
 
   console.log(
