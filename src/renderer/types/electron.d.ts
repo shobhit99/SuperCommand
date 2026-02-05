@@ -17,6 +17,17 @@ export interface AppSettings {
   commandHotkeys: Record<string, string>;
 }
 
+export interface CatalogEntry {
+  name: string;
+  title: string;
+  description: string;
+  author: string;
+  icon: string;
+  iconUrl: string;
+  categories: string[];
+  commands: { name: string; title: string; description: string }[];
+}
+
 export interface ElectronAPI {
   // Launcher
   getCommands: () => Promise<CommandInfo[]>;
@@ -38,6 +49,12 @@ export interface ElectronAPI {
     enabled: boolean
   ) => Promise<boolean>;
   openSettings: () => Promise<void>;
+
+  // Store
+  getCatalog: (forceRefresh?: boolean) => Promise<CatalogEntry[]>;
+  getInstalledExtensionNames: () => Promise<string[]>;
+  installExtension: (name: string) => Promise<boolean>;
+  uninstallExtension: (name: string) => Promise<boolean>;
 }
 
 declare global {

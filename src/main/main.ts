@@ -14,6 +14,12 @@ import * as path from 'path';
 import { getAvailableCommands, executeCommand } from './commands';
 import { loadSettings, saveSettings } from './settings-store';
 import type { AppSettings } from './settings-store';
+import {
+  getCatalog,
+  getInstalledExtensionNames,
+  installExtension,
+  uninstallExtension,
+} from './extension-registry';
 
 const electron = require('electron');
 const { app, BrowserWindow, globalShortcut, ipcMain, screen } = electron;
@@ -362,6 +368,33 @@ app.whenReady().then(() => {
   ipcMain.handle('open-settings', () => {
     openSettingsWindow();
   });
+
+  // ─── IPC: Store (Community Extensions) ──────────────────────────
+
+  ipcMain.handle(
+    'get-catalog',
+    async (_event: any, forceRefresh?: boolean) => {
+      return await getCatalog(forceRefresh ?? false);
+    }
+  );
+
+  ipcMain.handle('get-installed-extension-names', () => {
+    return getInstalledExtensionNames();
+  });
+
+  ipcMain.handle(
+    'install-extension',
+    async (_event: any, name: string) => {
+      return await installExtension(name);
+    }
+  );
+
+  ipcMain.handle(
+    'uninstall-extension',
+    async (_event: any, name: string) => {
+      return await uninstallExtension(name);
+    }
+  );
 
   // ─── Window + Shortcuts ─────────────────────────────────────────
 

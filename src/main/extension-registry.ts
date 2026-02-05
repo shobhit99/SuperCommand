@@ -1,0 +1,323 @@
+/**
+ * Extension Registry
+ *
+ * Fetches, caches, installs, and uninstalls community extensions
+ * from the Raycast extensions GitHub repository.
+ *
+ * Catalog Strategy:
+ *   1. git sparse-checkout to get only package.json files (fast, no full clone)
+ *   2. Parse each package.json for metadata (title, description, icon, author)
+ *   3. Cache the full catalog locally as JSON
+ *   4. Refresh every 24 hours
+ *
+ * Install Strategy:
+ *   1. git sparse-checkout of the specific extension directory
+ *   2. Copy to ~/Library/Application Support/SuperCommand/extensions/
+ *   3. Run npm install --production
+ */
+
+import { app } from 'electron';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const execAsync = promisify(exec);
+
+const REPO_URL = 'https://github.com/raycast/extensions.git';
+const GITHUB_RAW =
+  'https://raw.githubusercontent.com/raycast/extensions/main';
+
+// ─── Types ──────────────────────────────────────────────────────────
+
+export interface CatalogEntry {
+  name: string; // directory name in repo
+  title: string;
+  description: string;
+  author: string;
+  icon: string; // icon filename
+  iconUrl: string; // full GitHub raw URL to icon
+  categories: string[];
+  commands: { name: string; title: string; description: string }[];
+}
+
+interface CatalogCache {
+  entries: CatalogEntry[];
+  fetchedAt: number;
+  version: number;
+}
+
+const CATALOG_VERSION = 1;
+const CATALOG_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+let catalogCache: CatalogCache | null = null;
+
+// ─── Paths ──────────────────────────────────────────────────────────
+
+function getCatalogPath(): string {
+  return path.join(app.getPath('userData'), 'extension-catalog.json');
+}
+
+function getExtensionsDir(): string {
+  const dir = path.join(app.getPath('userData'), 'extensions');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function getInstalledPath(name: string): string {
+  return path.join(getExtensionsDir(), name);
+}
+
+// ─── Catalog: Disk Cache ────────────────────────────────────────────
+
+function loadCatalogFromDisk(): CatalogCache | null {
+  try {
+    const data = fs.readFileSync(getCatalogPath(), 'utf-8');
+    const cache: CatalogCache = JSON.parse(data);
+    if (cache.version === CATALOG_VERSION && Array.isArray(cache.entries)) {
+      return cache;
+    }
+  } catch {}
+  return null;
+}
+
+function saveCatalogToDisk(catalog: CatalogCache): void {
+  try {
+    fs.writeFileSync(getCatalogPath(), JSON.stringify(catalog));
+  } catch (e) {
+    console.error('Failed to save catalog:', e);
+  }
+}
+
+// ─── Catalog: Fetch from GitHub ─────────────────────────────────────
+
+/**
+ * Fetch the full extension catalog.
+ * Uses git sparse-checkout to efficiently get only package.json files.
+ */
+async function fetchCatalogFromGitHub(): Promise<CatalogEntry[]> {
+  const tmpDir = path.join(
+    app.getPath('temp'),
+    `supercommand-catalog-${Date.now()}`
+  );
+
+  try {
+    console.log('Cloning extension catalog (sparse)…');
+
+    // Sparse clone: only tree structure, no blobs
+    await execAsync(
+      `git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${tmpDir}"`,
+      { timeout: 60_000 }
+    );
+
+    // Checkout only package.json files under extensions/*/
+    await execAsync(
+      `cd "${tmpDir}" && git sparse-checkout set --no-cone "extensions/*/package.json"`,
+      { timeout: 120_000 }
+    );
+
+    const extensionsDir = path.join(tmpDir, 'extensions');
+    if (!fs.existsSync(extensionsDir)) return [];
+
+    const dirs = fs.readdirSync(extensionsDir);
+    const entries: CatalogEntry[] = [];
+
+    for (const dir of dirs) {
+      const pkgPath = path.join(extensionsDir, dir, 'package.json');
+      if (!fs.existsSync(pkgPath)) continue;
+
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+
+        const iconFile = pkg.icon || 'icon.png';
+        // Icon is typically at the extension root level
+        const iconUrl = `${GITHUB_RAW}/extensions/${dir}/assets/${iconFile}`;
+
+        const commands = (pkg.commands || []).map((c: any) => ({
+          name: c.name || '',
+          title: c.title || '',
+          description: c.description || '',
+        }));
+
+        entries.push({
+          name: dir,
+          title: pkg.title || dir,
+          description: pkg.description || '',
+          author: pkg.author || '',
+          icon: iconFile,
+          iconUrl,
+          categories: pkg.categories || [],
+          commands,
+        });
+      } catch {
+        // Skip malformed package.json
+      }
+    }
+
+    entries.sort((a, b) => a.title.localeCompare(b.title));
+    return entries;
+  } catch (error) {
+    console.error('Failed to fetch catalog from GitHub:', error);
+    // Fall back to disk cache even if expired
+    const diskCache = loadCatalogFromDisk();
+    if (diskCache) return diskCache.entries;
+    return [];
+  } finally {
+    // Cleanup temp clone
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// ─── Catalog: Public API ────────────────────────────────────────────
+
+export async function getCatalog(
+  forceRefresh = false
+): Promise<CatalogEntry[]> {
+  // In-memory cache
+  if (
+    !forceRefresh &&
+    catalogCache &&
+    Date.now() - catalogCache.fetchedAt < CATALOG_TTL
+  ) {
+    return catalogCache.entries;
+  }
+
+  // Disk cache
+  if (!forceRefresh) {
+    const diskCache = loadCatalogFromDisk();
+    if (diskCache && Date.now() - diskCache.fetchedAt < CATALOG_TTL) {
+      catalogCache = diskCache;
+      return diskCache.entries;
+    }
+  }
+
+  // Fetch fresh from GitHub
+  const entries = await fetchCatalogFromGitHub();
+
+  const cache: CatalogCache = {
+    entries,
+    fetchedAt: Date.now(),
+    version: CATALOG_VERSION,
+  };
+
+  catalogCache = cache;
+  saveCatalogToDisk(cache);
+
+  console.log(`Extension catalog: ${entries.length} extensions cached.`);
+  return entries;
+}
+
+// ─── Install / Uninstall ────────────────────────────────────────────
+
+export function isExtensionInstalled(name: string): boolean {
+  const p = getInstalledPath(name);
+  return (
+    fs.existsSync(p) && fs.existsSync(path.join(p, 'package.json'))
+  );
+}
+
+export function getInstalledExtensionNames(): string[] {
+  try {
+    return fs.readdirSync(getExtensionsDir()).filter((d) => {
+      const p = getInstalledPath(d);
+      return (
+        fs.statSync(p).isDirectory() &&
+        fs.existsSync(path.join(p, 'package.json'))
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Install a community extension by name.
+ * Uses git sparse-checkout to download only the specific extension directory.
+ */
+export async function installExtension(name: string): Promise<boolean> {
+  const installPath = getInstalledPath(name);
+
+  if (fs.existsSync(installPath)) {
+    console.log(`Extension ${name} is already installed.`);
+    return true;
+  }
+
+  const tmpDir = path.join(
+    app.getPath('temp'),
+    `supercommand-install-${Date.now()}`
+  );
+
+  try {
+    console.log(`Installing extension: ${name}…`);
+
+    // Sparse clone
+    await execAsync(
+      `git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" "${tmpDir}"`,
+      { timeout: 60_000 }
+    );
+
+    // Checkout only this extension
+    await execAsync(
+      `cd "${tmpDir}" && git sparse-checkout set "extensions/${name}"`,
+      { timeout: 60_000 }
+    );
+
+    const srcDir = path.join(tmpDir, 'extensions', name);
+    if (!fs.existsSync(srcDir)) {
+      console.error(`Extension "${name}" not found in repository.`);
+      return false;
+    }
+
+    // Copy to local extensions directory
+    fs.cpSync(srcDir, installPath, { recursive: true });
+
+    // Install npm dependencies (optional — some extensions need this)
+    try {
+      await execAsync(`cd "${installPath}" && npm install --production 2>/dev/null`, {
+        timeout: 120_000,
+      });
+    } catch {
+      // Many extensions might not have a lock file or deps; that's OK
+    }
+
+    console.log(`Extension "${name}" installed successfully at ${installPath}`);
+    return true;
+  } catch (error) {
+    console.error(`Failed to install extension "${name}":`, error);
+    // Cleanup partial install
+    try {
+      fs.rmSync(installPath, { recursive: true, force: true });
+    } catch {}
+    return false;
+  } finally {
+    // Cleanup temp clone
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+/**
+ * Uninstall a community extension by name.
+ */
+export async function uninstallExtension(name: string): Promise<boolean> {
+  const installPath = getInstalledPath(name);
+
+  if (!fs.existsSync(installPath)) {
+    return true; // Already gone
+  }
+
+  try {
+    fs.rmSync(installPath, { recursive: true, force: true });
+    console.log(`Extension "${name}" uninstalled.`);
+    return true;
+  } catch (error) {
+    console.error(`Failed to uninstall extension "${name}":`, error);
+    return false;
+  }
+}
+

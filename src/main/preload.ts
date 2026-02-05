@@ -33,4 +33,14 @@ contextBridge.exposeInMainWorld('electron', {
   ): Promise<boolean> =>
     ipcRenderer.invoke('toggle-command-enabled', commandId, enabled),
   openSettings: (): Promise<void> => ipcRenderer.invoke('open-settings'),
+
+  // ─── Store ────────────────────────────────────────────────────
+  getCatalog: (forceRefresh?: boolean): Promise<any[]> =>
+    ipcRenderer.invoke('get-catalog', forceRefresh),
+  getInstalledExtensionNames: (): Promise<string[]> =>
+    ipcRenderer.invoke('get-installed-extension-names'),
+  installExtension: (name: string): Promise<boolean> =>
+    ipcRenderer.invoke('install-extension', name),
+  uninstallExtension: (name: string): Promise<boolean> =>
+    ipcRenderer.invoke('uninstall-extension', name),
 });
