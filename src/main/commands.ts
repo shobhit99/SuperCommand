@@ -16,6 +16,7 @@ import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { discoverInstalledExtensionCommands } from './extension-runner';
 
 const execAsync = promisify(exec);
 let iconCounter = 0;
@@ -25,7 +26,7 @@ export interface CommandInfo {
   title: string;
   keywords?: string[];
   iconDataUrl?: string;
-  category: 'app' | 'settings' | 'system';
+  category: 'app' | 'settings' | 'system' | 'extension';
   /** .app path for apps, bundle identifier for settings */
   path?: string;
   /** Bundle path on disk (used for icon extraction) */
@@ -627,7 +628,22 @@ export async function getAvailableCommands(): Promise<CommandInfo[]> {
     },
   ];
 
-  const allCommands = [...apps, ...settings, ...systemCommands];
+  // Installed community extensions
+  let extensionCommands: CommandInfo[] = [];
+  try {
+    extensionCommands = discoverInstalledExtensionCommands().map((ext) => ({
+      id: ext.id,
+      title: ext.title,
+      keywords: ext.keywords,
+      iconDataUrl: ext.iconDataUrl,
+      category: 'extension' as const,
+      path: `${ext.extName}/${ext.cmdName}`,
+    }));
+  } catch (e) {
+    console.error('Failed to discover installed extensions:', e);
+  }
+
+  const allCommands = [...apps, ...settings, ...extensionCommands, ...systemCommands];
 
   // ── Batch-extract icons via NSWorkspace for APPS only ──
   // (NSWorkspace returns generic document icons for settings .appex bundles,

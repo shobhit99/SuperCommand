@@ -20,6 +20,7 @@ import {
   installExtension,
   uninstallExtension,
 } from './extension-registry';
+import { getExtensionBundle } from './extension-runner';
 
 const electron = require('electron');
 const { app, BrowserWindow, globalShortcut, ipcMain, screen } = electron;
@@ -368,6 +369,17 @@ app.whenReady().then(() => {
   ipcMain.handle('open-settings', () => {
     openSettingsWindow();
   });
+
+  // ─── IPC: Extension Runner ───────────────────────────────────────
+
+  ipcMain.handle(
+    'run-extension',
+    async (_event: any, extName: string, cmdName: string) => {
+      const result = await getExtensionBundle(extName, cmdName);
+      if (!result) return null;
+      return { code: result.code, title: result.title, extName, cmdName };
+    }
+  );
 
   // ─── IPC: Store (Community Extensions) ──────────────────────────
 

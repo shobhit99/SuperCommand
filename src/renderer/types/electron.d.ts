@@ -7,8 +7,15 @@ export interface CommandInfo {
   title: string;
   keywords?: string[];
   iconDataUrl?: string;
-  category: 'app' | 'settings' | 'system';
+  category: 'app' | 'settings' | 'system' | 'extension';
   path?: string;
+}
+
+export interface ExtensionBundle {
+  code: string;
+  title: string;
+  extName: string;
+  cmdName: string;
 }
 
 export interface AppSettings {
@@ -49,6 +56,9 @@ export interface ElectronAPI {
     enabled: boolean
   ) => Promise<boolean>;
   openSettings: () => Promise<void>;
+
+  // Extension Runner
+  runExtension: (extName: string, cmdName: string) => Promise<ExtensionBundle | null>;
 
   // Store
   getCatalog: (forceRefresh?: boolean) => Promise<CatalogEntry[]>;

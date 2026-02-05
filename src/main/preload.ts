@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('toggle-command-enabled', commandId, enabled),
   openSettings: (): Promise<void> => ipcRenderer.invoke('open-settings'),
 
+  // ─── Extension Runner ────────────────────────────────────────────
+  runExtension: (extName: string, cmdName: string): Promise<any> =>
+    ipcRenderer.invoke('run-extension', extName, cmdName),
+
   // ─── Store ────────────────────────────────────────────────────
   getCatalog: (forceRefresh?: boolean): Promise<any[]> =>
     ipcRenderer.invoke('get-catalog', forceRefresh),

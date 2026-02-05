@@ -6,8 +6,9 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, X, Power, Settings } from 'lucide-react';
-import type { CommandInfo } from '../types/electron';
+import { Search, X, Power, Settings, Puzzle } from 'lucide-react';
+import type { CommandInfo, ExtensionBundle } from '../types/electron';
+import ExtensionView from './ExtensionView';
 
 /**
  * Filter and sort commands based on search query
@@ -64,6 +65,8 @@ function getCategoryLabel(category: string): string {
       return 'System Settings';
     case 'system':
       return 'System';
+    case 'extension':
+      return 'Extension';
     case 'app':
     default:
       return 'Application';
@@ -75,6 +78,7 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [extensionView, setExtensionView] = useState<ExtensionBundle | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -165,6 +169,18 @@ const App: React.FC = () => {
 
   const handleCommandExecute = async (command: CommandInfo) => {
     try {
+      if (command.category === 'extension' && command.path) {
+        // Extension command — build and show extension view
+        const [extName, cmdName] = command.path.split('/');
+        const bundle = await window.electron.runExtension(extName, cmdName);
+        if (bundle) {
+          setExtensionView(bundle);
+          return;
+        }
+        console.error('Failed to load extension');
+        return;
+      }
+
       await window.electron.executeCommand(command.id);
       setSearchQuery('');
       setSelectedIndex(0);
@@ -173,6 +189,27 @@ const App: React.FC = () => {
     }
   };
 
+  // ─── Extension view mode ──────────────────────────────────────────
+  if (extensionView) {
+    return (
+      <div className="w-full h-full">
+        <div className="glass-effect rounded-2xl shadow-2xl overflow-hidden h-full flex flex-col">
+          <ExtensionView
+            code={extensionView.code}
+            title={extensionView.title}
+            onClose={() => {
+              setExtensionView(null);
+              setSearchQuery('');
+              setSelectedIndex(0);
+              setTimeout(() => inputRef.current?.focus(), 50);
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ─── Launcher mode ──────────────────────────────────────────────
   return (
     <div className="w-full h-full">
       <div className="glass-effect rounded-2xl shadow-2xl overflow-hidden h-full flex flex-col">
@@ -237,6 +274,10 @@ const App: React.FC = () => {
                       ) : command.category === 'system' ? (
                         <div className="w-5 h-5 rounded bg-red-500/20 flex items-center justify-center">
                           <Power className="w-3 h-3 text-red-400" />
+                        </div>
+                      ) : command.category === 'extension' ? (
+                        <div className="w-5 h-5 rounded bg-purple-500/20 flex items-center justify-center">
+                          <Puzzle className="w-3 h-3 text-purple-400" />
                         </div>
                       ) : (
                         <div className="w-5 h-5 rounded bg-gray-500/20 flex items-center justify-center">
