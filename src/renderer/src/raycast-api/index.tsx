@@ -1338,10 +1338,15 @@ ListDropdown.Section = ({ children }: { children?: React.ReactNode; title?: stri
 // Raycast shortcuts: { modifiers: ["cmd","opt","shift","ctrl"], key: "e" }
 function matchesShortcut(e: React.KeyboardEvent | KeyboardEvent, shortcut?: { modifiers?: string[]; key?: string }): boolean {
   if (!shortcut?.key) return false;
-  if (e.key.toLowerCase() !== shortcut.key.toLowerCase()) return false;
+  const sk = shortcut.key.toLowerCase();
+  const ek = e.key.toLowerCase();
+  // Also match against e.code (layout-independent: "KeyD" for "d") for robustness
+  const ec = ((e as any).code || '').toLowerCase();
+  const keyMatch = ek === sk;
+  const codeMatch = sk.length === 1 && /^[a-z]$/.test(sk) && ec === `key${sk}`;
+  if (!keyMatch && !codeMatch) return false;
   const mods = shortcut.modifiers || [];
   if (mods.includes('cmd') !== e.metaKey) return false;
-  // Handle both 'opt' and 'option' (Raycast uses both forms)
   if ((mods.includes('opt') || mods.includes('option') || mods.includes('alt')) !== e.altKey) return false;
   if (mods.includes('shift') !== e.shiftKey) return false;
   if (mods.includes('ctrl') !== e.ctrlKey) return false;
@@ -1465,6 +1470,18 @@ function ListComponent({
     }
     if (showActions) return; // Let the overlay handle keys
 
+    // ── Extension-defined shortcuts (⌘D, ⌘E, ⌘T, etc.) ────────
+    if ((e.metaKey || e.altKey || e.ctrlKey) && !e.repeat) {
+      for (const action of selectedActions) {
+        if (action.shortcut && matchesShortcut(e, action.shortcut)) {
+          e.preventDefault();
+          e.stopPropagation();
+          action.execute();
+          return;
+        }
+      }
+    }
+
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); setSelectedIdx(p => Math.min(p + 1, filteredItems.length - 1)); break;
       case 'ArrowUp': e.preventDefault(); setSelectedIdx(p => Math.max(p - 1, 0)); break;
@@ -1480,16 +1497,11 @@ function ListComponent({
         pop();
         break;
     }
-  }, [filteredItems.length, selectedIdx, pop, primaryAction, showActions]);
+  }, [filteredItems.length, selectedIdx, pop, primaryAction, showActions, selectedActions]);
 
-  // ── Window-level shortcut listener ─────────────────────────────
-  // Extension-defined shortcuts (⌘E, ⌘D, ⌘T, etc.) must be caught
-  // at the window level in the capture phase, BEFORE the browser or
-  // Electron can intercept them. React's onKeyDown on a div sometimes
-  // misses modifier-key combos due to native handling.
-  //
-  // We use refs for the values so the handler closure doesn't go stale
-  // and we don't need to re-register the listener on every action change.
+  // ── Window-level shortcut listener (backup) ────────────────────
+  // Capture phase fires before React's delegated handler, providing
+  // a reliable backup for extension shortcuts.
   const selectedActionsRef = useRef(selectedActions);
   selectedActionsRef.current = selectedActions;
   const showActionsRef = useRef(showActions);
@@ -1499,24 +1511,13 @@ function ListComponent({
     const handler = (e: KeyboardEvent) => {
       const actions = selectedActionsRef.current;
       const panelOpen = showActionsRef.current;
-
-      // Only process when the action panel is NOT open
       if (panelOpen) return;
-      // Skip ⌘K (handled by React handler for action panel toggle)
       if (e.key === 'k' && e.metaKey) return;
-      // Only check shortcuts when a modifier key is active (not plain typing)
       if (!e.metaKey && !e.altKey && !e.ctrlKey) return;
       if (e.repeat) return;
 
-      // Debug: log modifier key events and available shortcuts
-      const shortcuts = actions.filter(a => a.shortcut).map(a =>
-        `${a.title}[${a.shortcut!.modifiers?.join('+')}+${a.shortcut!.key}]`
-      );
-      console.log(`[Shortcut] key=${e.key} meta=${e.metaKey} alt=${e.altKey} shift=${e.shiftKey} | ${actions.length} actions, shortcuts: ${shortcuts.join(', ') || 'none'}`);
-
       for (const action of actions) {
         if (action.shortcut && matchesShortcut(e, action.shortcut)) {
-          console.log(`[Shortcut] MATCH → ${action.title}`);
           e.preventDefault();
           e.stopPropagation();
           action.execute();
@@ -1524,9 +1525,9 @@ function ListComponent({
         }
       }
     };
-    window.addEventListener('keydown', handler, true); // capture phase
+    window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, []); // stable — reads from refs
+  }, []);
 
   // ── Selection stabilization ─────────────────────────────────────
   // When items change (e.g. mark complete moves an item between sections),

@@ -602,7 +602,16 @@ const cryptoStub = {
     update: function(data: any) { return this; },
     digest: (enc?: string) => enc === 'hex' ? Math.random().toString(16).slice(2) : BufferPolyfill.from(Math.random().toString(36).slice(2)),
   }),
-  randomBytes: (n: number) => BufferPolyfill.alloc(n),
+  randomBytes: (n: number) => { const buf = BufferPolyfill.alloc(n); crypto.getRandomValues(buf); return buf; },
+  randomFillSync: (buf: any, offset?: number, size?: number) => {
+    const view = new Uint8Array(buf.buffer || buf, offset ?? 0, size ?? buf.length);
+    crypto.getRandomValues(view);
+    return buf;
+  },
+  randomFill: (buf: any, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    try { cryptoStub.randomFillSync(buf); if (typeof cb === 'function') cb(null, buf); } catch (e) { if (typeof cb === 'function') cb(e); }
+  },
   getRandomValues: (arr: any) => crypto.getRandomValues(arr),
   createCipheriv: () => ({ update: () => BufferPolyfill.alloc(0), final: () => BufferPolyfill.alloc(0) }),
   createDecipheriv: () => ({ update: () => BufferPolyfill.alloc(0), final: () => BufferPolyfill.alloc(0) }),
@@ -1303,7 +1312,7 @@ const NoViewRunner: React.FC<{
 
     (async () => {
       try {
-        await fn();
+        await fn({ arguments: {}, launchType: 'userInitiated' });
         if (!cancelled) {
           setStatus('done');
           setTimeout(() => onClose(), 600);
@@ -1353,7 +1362,8 @@ const ViewRenderer: React.FC<{ Component: React.FC }> = ({ Component }) => {
   // Simple test that hooks work here
   const [test] = useState('ok');
   console.log('[ViewRenderer] Hooks work here, rendering extension...');
-  return React.createElement(Component, null);
+  // Pass standard Raycast props: arguments (command arguments) and launchType
+  return React.createElement(Component, { arguments: {}, launchType: 'userInitiated' } as any);
 };
 
 const ExtensionView: React.FC<ExtensionViewProps> = ({
