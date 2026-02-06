@@ -1065,6 +1065,18 @@ function ActionPanelOverlay({
   }, [selectedIdx]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Extension-defined shortcuts work even when action panel is open
+    if ((e.metaKey || e.altKey || e.ctrlKey) && !e.repeat) {
+      // ⌘K closes the panel (handled by parent)
+      if (e.key === 'k' && e.metaKey) { e.preventDefault(); onClose(); return; }
+      for (const action of actions) {
+        if (action.shortcut && matchesShortcut(e, action.shortcut)) {
+          e.preventDefault();
+          onExecute(action);
+          return;
+        }
+      }
+    }
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); setSelectedIdx(p => Math.min(p + 1, filteredActions.length - 1)); break;
       case 'ArrowUp': e.preventDefault(); setSelectedIdx(p => Math.max(p - 1, 0)); break;
@@ -1468,19 +1480,23 @@ function ListComponent({
       setShowActions(prev => !prev);
       return;
     }
-    if (showActions) return; // Let the overlay handle keys
 
     // ── Extension-defined shortcuts (⌘D, ⌘E, ⌘T, etc.) ────────
+    // Must check BEFORE the showActions bail-out so shortcuts
+    // work regardless of whether the action panel is open.
     if ((e.metaKey || e.altKey || e.ctrlKey) && !e.repeat) {
       for (const action of selectedActions) {
         if (action.shortcut && matchesShortcut(e, action.shortcut)) {
           e.preventDefault();
           e.stopPropagation();
+          setShowActions(false); // close panel if open
           action.execute();
           return;
         }
       }
     }
+
+    if (showActions) return; // Let the overlay handle arrow/enter/escape
 
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); setSelectedIdx(p => Math.min(p + 1, filteredItems.length - 1)); break;
@@ -1510,8 +1526,6 @@ function ListComponent({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const actions = selectedActionsRef.current;
-      const panelOpen = showActionsRef.current;
-      if (panelOpen) return;
       if (e.key === 'k' && e.metaKey) return;
       if (!e.metaKey && !e.altKey && !e.ctrlKey) return;
       if (e.repeat) return;
