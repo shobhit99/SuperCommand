@@ -255,8 +255,33 @@ function registerCommandHotkeys(hotkeys: Record<string, string>): void {
 
 // ─── App Initialization ─────────────────────────────────────────────
 
-app.whenReady().then(() => {
+async function rebuildExtensions() {
+  const installed = getInstalledExtensionNames();
+  if (installed.length > 0) {
+    console.log(`Checking ${installed.length} installed extensions for rebuilds...`);
+    for (const name of installed) {
+      // We can't easily check if it needs rebuild here without fs access logic
+      // but buildAllCommands is fast enough if we just run it.
+      // Or we can rely on buildAllCommands to handle caching?
+      // For now, let's just trigger it. It will overwrite existing builds.
+      // This ensures we always have fresh builds on startup.
+      console.log(`Rebuilding extension: ${name}`);
+      try {
+        await buildAllCommands(name);
+      } catch (e) {
+        console.error(`Failed to rebuild ${name}:`, e);
+      }
+    }
+    console.log('Extensions rebuild complete.');
+    invalidateCache();
+  }
+}
+
+app.whenReady().then(async () => {
   const settings = loadSettings();
+  
+  // Rebuild extensions in background
+  rebuildExtensions().catch(console.error);
 
   // ─── IPC: Launcher ──────────────────────────────────────────────
 

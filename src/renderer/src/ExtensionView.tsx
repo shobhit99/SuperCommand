@@ -8,8 +8,9 @@
  * custom `require()` that provides React and our @raycast/api shim.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import ReactDOM from 'react-dom';
+import * as React from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import * as ReactDOM from 'react-dom';
 import * as ReactJsxRuntime from 'react/jsx-runtime';
 import { ArrowLeft, AlertTriangle } from 'lucide-react';
 import * as RaycastAPI from './raycast-api';

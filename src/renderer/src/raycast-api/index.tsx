@@ -82,43 +82,72 @@ export const environment: Record<string, any> = {
 // ─── Toast ──────────────────────────────────────────────────────────
 // =====================================================================
 
-export const Toast = {
-  Style: {
-    Animated: 'animated' as const,
-    Success: 'success' as const,
-    Failure: 'failure' as const,
-  },
-};
-
-let toastEl: HTMLDivElement | null = null;
-
-function _showToastElement(title: string, style: string, message?: string) {
-  if (toastEl) toastEl.remove();
-  toastEl = document.createElement('div');
-  toastEl.style.cssText =
-    'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
-    'padding:8px 16px;border-radius:8px;font-size:13px;z-index:99999;' +
-    'color:#fff;backdrop-filter:blur(20px);max-width:400px;text-align:center;' +
-    `background:${style === 'failure' ? 'rgba(255,60,60,0.85)' : style === 'animated' ? 'rgba(60,60,255,0.85)' : 'rgba(40,180,80,0.85)'}`;
-  toastEl.textContent = title + (message ? ` — ${message}` : '');
-  document.body.appendChild(toastEl);
-  const timer = setTimeout(() => { toastEl?.remove(); toastEl = null; }, 3000);
-  return {
-    hide: () => { clearTimeout(timer); toastEl?.remove(); toastEl = null; },
-    title,
-    message: message || '',
-    style,
-  };
+export enum ToastStyle {
+  Animated = 'animated',
+  Success = 'success',
+  Failure = 'failure',
 }
 
-export function showToast(optionsOrStyle: any, titleOrUndefined?: string, messageOrUndefined?: string): any {
-  // Support both showToast({ title, style, message }) and showToast(style, title, message)
-  if (typeof optionsOrStyle === 'object' && optionsOrStyle !== null) {
-    const { title = '', style = 'success', message = '' } = optionsOrStyle;
-    return _showToastElement(title, style, message);
+export class Toast {
+  static Style = ToastStyle;
+
+  public title: string = '';
+  public message?: string;
+  public style: ToastStyle = ToastStyle.Success;
+  public primaryAction?: any;
+  public secondaryAction?: any;
+
+  private _el: HTMLDivElement | null = null;
+  private _timer: any = null;
+
+  constructor(options: { style?: ToastStyle; title: string; message?: string; primaryAction?: any; secondaryAction?: any }) {
+    this.style = options.style || ToastStyle.Success;
+    this.title = options.title || '';
+    this.message = options.message;
+    this.primaryAction = options.primaryAction;
+    this.secondaryAction = options.secondaryAction;
   }
-  // Legacy call signature: showToast(style, title, message)
-  return _showToastElement(titleOrUndefined || '', optionsOrStyle || 'success', messageOrUndefined);
+
+  show() {
+    this.hide(); // clear any existing
+    this._el = document.createElement('div');
+    const styleColor =
+      this.style === ToastStyle.Failure ? 'rgba(255,60,60,0.85)' :
+      this.style === ToastStyle.Animated ? 'rgba(60,60,255,0.85)' :
+      'rgba(40,180,80,0.85)';
+
+    this._el.style.cssText =
+      'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
+      'padding:8px 16px;border-radius:8px;font-size:13px;z-index:99999;' +
+      `color:#fff;backdrop-filter:blur(20px);max-width:400px;text-align:center;background:${styleColor}`;
+
+    this._el.textContent = this.title + (this.message ? ` — ${this.message}` : '');
+    document.body.appendChild(this._el);
+
+    this._timer = setTimeout(() => this.hide(), 3000);
+    return Promise.resolve();
+  }
+
+  hide() {
+    if (this._timer) clearTimeout(this._timer);
+    if (this._el) {
+      this._el.remove();
+      this._el = null;
+    }
+    return Promise.resolve();
+  }
+}
+
+export function showToast(optionsOrStyle: any, titleOrUndefined?: string, messageOrUndefined?: string): Promise<Toast> {
+  let options: any = {};
+  if (typeof optionsOrStyle === 'string') {
+    options = { style: optionsOrStyle, title: titleOrUndefined, message: messageOrUndefined };
+  } else {
+    options = optionsOrStyle;
+  }
+  const t = new Toast(options);
+  t.show();
+  return Promise.resolve(t);
 }
 
 // =====================================================================
