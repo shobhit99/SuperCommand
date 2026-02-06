@@ -271,6 +271,9 @@ const iconMap: Record<string, string> = {
   Checkmark: '✓',
   XMarkCircle: '✕',
   ExclamationMark: '!',
+  Exclamationmark: '!',
+  Exclamationmark2: '‼',
+  Exclamationmark3: '⁉',
   QuestionMark: '?',
   Info: 'ℹ',
   Star: '⭐',
@@ -377,6 +380,41 @@ const iconMap: Record<string, string> = {
   Fingerprint: '🔐',
   AppWindow: '⬜',
   AppWindowGrid: '⊞',
+  Dot: '•',
+  BandAid: '🩹',
+  Raindrop: '💧',
+  TwoPeople: '👥',
+  AddPerson: '👤+',
+  RemovePerson: '👤-',
+  SaveDocument: '💾',
+  NewDocument: '📄',
+  NewFolder: '📁',
+  Switch: '⇄',
+  Sidebar: '▊',
+  BarChart: '📊',
+  LineChart: '📈',
+  PieChart: '🥧',
+  Snippet: '{ }',
+  TextInput: '⌨',
+  Paragraph: '¶',
+  Uppercase: 'AA',
+  Lowercase: 'aa',
+  FullSignal: '📶',
+  RotateAntiClockwise: '↺',
+  RotateClockwise: '↻',
+  Maximize: '⤢',
+  Minimize: '⤡',
+  ArrowClockwise: '↻',
+  ArrowCounterClockwise: '↺',
+  Eraser: '⌫',
+  Megaphone: '📢',
+  ArrowNe: '↗',
+  ArrowRightCircle: '→',
+  Eye: '👁',
+  EyeDisabled: '🚫',
+  EyeSlash: '👁‍🗨',
+  Cog: '⚙️',
+  Bubble: '💬',
 };
 
 // Return the property name as the icon value. This works with our
@@ -386,6 +424,17 @@ export const Icon: Record<string, string> = new Proxy({} as Record<string, strin
     return iconMap[prop] || '•';
   },
 });
+
+// Helper: check if a string is an emoji/symbol (not a URL or file path)
+function isEmojiOrSymbol(s: string): boolean {
+  if (!s) return false;
+  if (s.startsWith('data:') || s.startsWith('http') || s.startsWith('/') || s.startsWith('.')) return false;
+  // Short strings (1-4 chars) that aren't file paths are likely emoji/symbols
+  if (s.length <= 4) return true;
+  // Check for emoji unicode ranges
+  if (/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B50}\u{2702}-\u{27B0}]/u.test(s)) return true;
+  return false;
+}
 
 // Helper component to render icons
 export function renderIcon(icon: any, className = 'w-4 h-4'): React.ReactNode {
@@ -402,18 +451,24 @@ export function renderIcon(icon: any, className = 'w-4 h-4'): React.ReactNode {
       return <span className="text-center" style={{ fontSize: '0.875rem' }}>{mappedIcon}</span>;
     }
     // Check if the icon itself is an emoji or symbol
-    if (icon.length <= 2 || /[\u{1F300}-\u{1F9FF}]/u.test(icon)) {
+    if (isEmojiOrSymbol(icon)) {
       return <span className="text-center" style={{ fontSize: '0.875rem' }}>{icon}</span>;
     }
     // Otherwise show a dot
     return <span className="opacity-50">•</span>;
   }
 
-  // If it's an object with source property
+  // If it's an object with source property (e.g., { source: Icon.Checkmark, tintColor: Color.Green })
   if (typeof icon === 'object' && icon !== null) {
+    const tintColor = icon.tintColor || undefined;
+
     if (icon.source) {
       const src = typeof icon.source === 'string' ? icon.source : icon.source?.light || icon.source?.dark || '';
       if (src) {
+        // Check if source is an emoji/symbol (from our Icon proxy) vs a real URL/path
+        if (isEmojiOrSymbol(src)) {
+          return <span className="text-center" style={{ fontSize: '0.875rem', color: tintColor }}>{src}</span>;
+        }
         return <img src={src} className={className + ' rounded'} alt="" />;
       }
     }
@@ -421,6 +476,9 @@ export function renderIcon(icon: any, className = 'w-4 h-4'): React.ReactNode {
     if (icon.light || icon.dark) {
       const src = icon.dark || icon.light;
       if (typeof src === 'string') {
+        if (isEmojiOrSymbol(src)) {
+          return <span className="text-center" style={{ fontSize: '0.875rem', color: tintColor }}>{src}</span>;
+        }
         return <img src={src} className={className + ' rounded'} alt="" />;
       }
     }
@@ -687,54 +745,202 @@ export function openCommandPreferences(): void {
 }
 
 // =====================================================================
+// ─── Action Registry Context ────────────────────────────────────────
+// =====================================================================
+
+// Action components register themselves via this context when mounted
+// inside a collecting container. This allows actions to work even when
+// wrapped in custom components that use hooks (e.g., <ListActions />).
+
+let _actionOrderCounter = 0;
+
+interface ActionRegistration {
+  id: string;
+  title: string;
+  icon?: any;
+  shortcut?: { modifiers?: string[]; key?: string };
+  style?: string;
+  sectionTitle?: string;
+  execute: () => void;
+  order: number;
+}
+
+interface ActionRegistryAPI {
+  register: (id: string, data: Omit<ActionRegistration, 'id'>) => void;
+  unregister: (id: string) => void;
+}
+
+const ActionRegistryContext = createContext<ActionRegistryAPI | null>(null);
+const ActionSectionContext = createContext<string | undefined>(undefined);
+
+// Standalone executor factory (used by both static extraction and registry)
+function makeActionExecutor(p: any): () => void {
+  return () => {
+    if (p.onAction) { p.onAction(); return; }
+    if (p.onSubmit) { p.onSubmit(getFormValues()); return; }
+    if (p.content !== undefined) {
+      Clipboard.copy(String(p.content));
+      showToast({ title: 'Copied to clipboard', style: ToastStyle.Success });
+      return;
+    }
+    if (p.url) { (window as any).electron?.openUrl?.(p.url); return; }
+    if (p.target && React.isValidElement(p.target)) {
+      getGlobalNavigation().push(p.target);
+      return;
+    }
+    if (p.paths) { trash(p.paths); p.onTrash?.(); return; }
+  };
+}
+
+// Hook used by each Action component to register itself
+function useActionRegistration(props: any) {
+  const registry = useContext(ActionRegistryContext);
+  const sectionTitle = useContext(ActionSectionContext);
+  const idRef = useRef(`__action_${++_actionOrderCounter}`);
+  const orderRef = useRef(++_actionOrderCounter);
+
+  // Build a stable executor ref so we always call the latest props
+  const propsRef = useRef(props);
+  propsRef.current = props;
+
+  useEffect(() => {
+    if (!registry) return;
+    const executor = () => makeActionExecutor(propsRef.current)();
+    registry.register(idRef.current, {
+      title: props.title || 'Action',
+      icon: props.icon,
+      shortcut: props.shortcut,
+      style: props.style,
+      sectionTitle,
+      execute: executor,
+      order: orderRef.current,
+    });
+    return () => registry.unregister(idRef.current);
+  });
+
+  return null;
+}
+
+// ── useCollectedActions hook ─────────────────────────────────────────
+// Manages an action registry for a given actions element.
+// Returns: { collectedActions, ActionsRenderer }
+// ActionsRenderer must be rendered in the tree (hidden) so hooks work.
+
+function useCollectedActions() {
+  const registryRef = useRef(new Map<string, ActionRegistration>());
+  const [version, setVersion] = useState(0);
+  const pendingRef = useRef(false);
+  const lastSnapshotRef = useRef('');
+
+  const scheduleUpdate = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    queueMicrotask(() => {
+      pendingRef.current = false;
+      const entries = Array.from(registryRef.current.values());
+      const snapshot = entries.map(e => `${e.id}:${e.title}:${e.sectionTitle || ''}`).join('|');
+      if (snapshot !== lastSnapshotRef.current) {
+        lastSnapshotRef.current = snapshot;
+        setVersion(v => v + 1);
+      }
+    });
+  }, []);
+
+  const registryAPI = useMemo<ActionRegistryAPI>(() => ({
+    register(id, data) {
+      registryRef.current.set(id, { id, ...data });
+      scheduleUpdate();
+    },
+    unregister(id) {
+      if (registryRef.current.has(id)) {
+        registryRef.current.delete(id);
+        scheduleUpdate();
+      }
+    },
+  }), [scheduleUpdate]);
+
+  const collectedActions = useMemo(() => {
+    return Array.from(registryRef.current.values()).sort((a, b) => a.order - b.order);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+
+  return { collectedActions, registryAPI };
+}
+
+// =====================================================================
 // ─── ActionPanel ────────────────────────────────────────────────────
 // =====================================================================
 
-// ActionPanel & Action components are "data-bearing" elements.
-// They are never rendered directly — instead, the List/Detail extracts
-// action data from them and renders the ActionPanelOverlay.
+// When ActionRegistryContext is available, ActionPanel renders its
+// children so that hooks inside wrapper components work and Action
+// components can register themselves. Otherwise returns null (legacy).
 
 function ActionPanelComponent({ children, title }: { children?: React.ReactNode; title?: string }) {
-  return null; // Never rendered
+  const registry = useContext(ActionRegistryContext);
+  if (registry) return <>{children}</>;
+  return null;
 }
 function ActionPanelSection({ children, title }: { children?: React.ReactNode; title?: string }) {
-  return null; // Never rendered
+  const registry = useContext(ActionRegistryContext);
+  if (registry) {
+    return (
+      <ActionSectionContext.Provider value={title}>
+        {children}
+      </ActionSectionContext.Provider>
+    );
+  }
+  return null;
 }
 function ActionPanelSubmenu({ children, title, icon }: { children?: React.ReactNode; title?: string; icon?: any }) {
-  return null; // Never rendered
+  const registry = useContext(ActionRegistryContext);
+  if (registry) {
+    return (
+      <ActionSectionContext.Provider value={title}>
+        {children}
+      </ActionSectionContext.Provider>
+    );
+  }
+  return null;
 }
 
 // =====================================================================
 // ─── Action ─────────────────────────────────────────────────────────
 // =====================================================================
 
-// All action components are data-bearing — never rendered directly.
-// Their props are extracted by extractActionsFromElement().
+// Action components register via context when mounted. They still
+// render null visually — the collected data drives the UI.
 
 function ActionComponent(_props: { title?: string; icon?: any; shortcut?: any; onAction?: () => void; style?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionCopyToClipboard(_props: { content: any; title?: string; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionOpenInBrowser(_props: { url: string; title?: string; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionPush(_props: { title?: string; target: React.ReactElement; icon?: any; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionSubmitForm(_props: { title?: string; onSubmit?: (values: any) => void; icon?: any; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionTrash(_props: { title?: string; paths?: string[]; onTrash?: () => void; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
 function ActionPickDate(_props: { title?: string; onChange?: (date: Date | null) => void; shortcut?: any; [key: string]: any }) {
+  useActionRegistration(_props);
   return null;
 }
-function ActionCreateSnippet(_props: any) { return null; }
-function ActionCreateQuicklink(_props: any) { return null; }
-function ActionToggleSidebar(_props: any) { return null; }
+function ActionCreateSnippet(_props: any) { useActionRegistration(_props); return null; }
+function ActionCreateQuicklink(_props: any) { useActionRegistration(_props); return null; }
+function ActionToggleSidebar(_props: any) { useActionRegistration(_props); return null; }
 
 export const Action = Object.assign(ActionComponent, {
   CopyToClipboard: ActionCopyToClipboard,
@@ -761,6 +967,7 @@ export const ActionPanel = Object.assign(ActionPanelComponent, {
 });
 
 // ── Extract action data from ActionPanel element tree ────────────────
+// Legacy static extraction — kept as fallback for non-registry usage.
 
 interface ExtractedAction {
   title: string;
@@ -775,50 +982,28 @@ function extractActionsFromElement(el: React.ReactElement | undefined | null): E
   if (!el) return [];
   const result: ExtractedAction[] = [];
 
-  function makeExecutor(p: any): () => void {
-    return () => {
-      if (p.onAction) { p.onAction(); return; }
-      if (p.onSubmit) { p.onSubmit(getFormValues()); return; }
-      if (p.content !== undefined) {
-        Clipboard.copy(String(p.content));
-        showToast({ title: 'Copied to clipboard', style: ToastStyle.Success });
-        return;
-      }
-      if (p.url) { (window as any).electron?.openUrl?.(p.url); return; }
-      if (p.target && React.isValidElement(p.target)) {
-        getGlobalNavigation().push(p.target);
-        return;
-      }
-      if (p.paths) { trash(p.paths); p.onTrash?.(); return; }
-    };
-  }
-
   function walk(nodes: React.ReactNode, sectionTitle?: string) {
     React.Children.forEach(nodes, (child) => {
       if (!React.isValidElement(child)) return;
       const p = child.props as any;
-      // Is this a section-like container? (has children but also title)
       const hasChildren = p.children != null;
       const isActionLike = p.onAction || p.onSubmit || p.content !== undefined || p.url || p.target || p.paths;
 
       if (isActionLike || (p.title && !hasChildren)) {
-        // It's an action
         result.push({
           title: p.title || 'Action',
           icon: p.icon,
           shortcut: p.shortcut,
           style: p.style,
           sectionTitle,
-          execute: makeExecutor(p),
+          execute: makeActionExecutor(p),
         });
       } else if (hasChildren) {
-        // It's a container (ActionPanel, Section, Submenu, Fragment)
         walk(p.children, p.title || sectionTitle);
       }
     });
   }
 
-  // Walk the ActionPanel's children
   const rootProps = el.props as any;
   if (rootProps?.children) {
     walk(rootProps.children);
@@ -1223,21 +1408,26 @@ function ListComponent({
     return () => { _clearSearchBarCallback = null; };
   }, [handleSearchChange]);
 
-  // ── Selected item and actions ──────────────────────────────────
+  // ── Action collection via registry ─────────────────────────────
+  // We render the active actions element in a hidden area with
+  // ActionRegistryContext so hooks in wrapper components work.
   const selectedItem = filteredItems[selectedIdx];
+
+  // Item-level action registry
+  const { collectedActions: itemActions, registryAPI: itemActionRegistry } = useCollectedActions();
+  // List-level action registry
+  const { collectedActions: globalActions, registryAPI: globalActionRegistry } = useCollectedActions();
+
   const selectedActions = useMemo(() => {
-    const itemActions = extractActionsFromElement(selectedItem?.props?.actions);
-    const globalActions = extractActionsFromElement(listActions);
-    // Merge: item actions first, then list actions (in a separate section)
-    if (globalActions.length > 0 && itemActions.length > 0) {
-      const merged = [...itemActions];
+    if (itemActions.length > 0 && globalActions.length > 0) {
+      const merged: ExtractedAction[] = [...itemActions];
       for (const ga of globalActions) {
         merged.push({ ...ga, sectionTitle: ga.sectionTitle || 'General' });
       }
       return merged;
     }
     return itemActions.length > 0 ? itemActions : globalActions;
-  }, [selectedItem, listActions]);
+  }, [itemActions, globalActions]);
 
   const primaryAction = selectedActions[0];
 
@@ -1347,7 +1537,23 @@ function ListComponent({
   return (
     <ListRegistryContext.Provider value={registryAPI}>
       {/* Hidden render area — children mount here and register items via context */}
-      <div style={{ display: 'none' }}>{children}</div>
+      <div style={{ display: 'none' }}>
+        {children}
+        {/* Render selected item's actions in registry context so hooks work */}
+        {selectedItem?.props?.actions && (
+          <ActionRegistryContext.Provider value={itemActionRegistry}>
+            <div key={selectedItem.id}>
+              {selectedItem.props.actions}
+            </div>
+          </ActionRegistryContext.Provider>
+        )}
+        {/* Render list-level actions in registry context */}
+        {listActions && (
+          <ActionRegistryContext.Provider value={globalActionRegistry}>
+            {listActions}
+          </ActionRegistryContext.Provider>
+        )}
+      </div>
 
       <div className="flex flex-col h-full" onKeyDown={handleKeyDown}>
         {/* ── Search bar ──────────────────────────────────────── */}
@@ -1511,6 +1717,7 @@ function FormComponent({ children, actions, navigationTitle, isLoading, enableDr
 }) {
   const [values, setValues] = useState<Record<string, any>>(draftValues || {});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showActions, setShowActions] = useState(false);
   const { pop } = useNavigation();
 
   const setValue = useCallback((id: string, value: any) => {
@@ -1519,7 +1726,6 @@ function FormComponent({ children, actions, navigationTitle, isLoading, enableDr
       _currentFormValues = next;
       return next;
     });
-    // Clear error when value changes
     setErrors(prev => {
       const next = { ...prev };
       delete next[id];
@@ -1536,35 +1742,113 @@ function FormComponent({ children, actions, navigationTitle, isLoading, enableDr
     });
   }, []);
 
-  // Update global ref whenever values change
   useEffect(() => {
     _currentFormValues = values;
     _currentFormErrors = errors;
   }, [values, errors]);
 
+  // ── Action collection via registry ─────────────────────────────
+  const { collectedActions: formActions, registryAPI: formActionRegistry } = useCollectedActions();
+  const primaryAction = formActions[0];
+
+  // ── Keyboard handler ───────────────────────────────────────────
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); pop(); } };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); pop(); return; }
+      // ⌘K toggles action panel
+      if (e.key === 'k' && e.metaKey) { e.preventDefault(); setShowActions(prev => !prev); return; }
+      // ⌘Enter triggers primary action
+      if (e.key === 'Enter' && e.metaKey && primaryAction) { e.preventDefault(); primaryAction.execute(); return; }
+    };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [pop]);
+  }, [pop, primaryAction]);
 
   const contextValue = useMemo(() => ({ values, setValue, errors, setError }), [values, setValue, errors, setError]);
 
+  const handleActionExecute = useCallback((action: ExtractedAction) => {
+    setShowActions(false);
+    action.execute();
+  }, []);
+
   return (
     <FormContext.Provider value={contextValue}>
+      {/* Hidden render area for actions */}
+      {actions && (
+        <div style={{ display: 'none' }}>
+          <ActionRegistryContext.Provider value={formActionRegistry}>
+            {actions}
+          </ActionRegistryContext.Provider>
+        </div>
+      )}
+
       <div className="flex flex-col h-full">
-        <div className="flex-1 overflow-y-auto p-6" style={{ background: 'rgba(10,10,12,0.5)' }}>
+        {/* ── Navigation bar ────────────────────────────────────── */}
+        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-white/[0.06]">
+          <button onClick={pop} className="text-white/30 hover:text-white/60 transition-colors flex-shrink-0 p-0.5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+        </div>
+
+        {/* ── Form content (horizontal layout) ──────────────────── */}
+        <div className="flex-1 overflow-y-auto py-6 px-4" style={{ background: 'rgba(10,10,12,0.5)' }}>
           {isLoading ? (
             <div className="flex items-center justify-center h-full text-white/50"><p className="text-sm">Loading…</p></div>
-          ) : children}
+          ) : (
+            <div className="max-w-2xl mx-auto space-y-4">
+              {children}
+            </div>
+          )}
         </div>
-        {actions && (
-          <div className="px-4 py-3 border-t border-white/[0.06] flex justify-end gap-2">
-            {actions}
+
+        {/* ── Footer ──────────────────────────────────────────── */}
+        <div className="flex items-center px-3 py-1.5 border-t border-white/[0.06]" style={{ background: 'rgba(20,20,24,0.8)' }}>
+          <div className="flex items-center gap-2 text-white/30 text-[11px] flex-1 min-w-0">
+            <span className="truncate">{navigationTitle || _extensionContext.extensionName || 'Extension'}</span>
           </div>
-        )}
+          {primaryAction && (
+            <div className="flex items-center gap-1.5 mr-3">
+              <span className="text-white/50 text-[11px]">{primaryAction.title}</span>
+              <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">⌘</kbd>
+              <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">↩</kbd>
+            </div>
+          )}
+          <button
+            onClick={() => setShowActions(true)}
+            className="flex items-center gap-1.5 text-white/40 hover:text-white/60 transition-colors"
+          >
+            <span className="text-[11px]">Actions</span>
+            <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">⌘</kbd>
+            <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">K</kbd>
+          </button>
+        </div>
       </div>
+
+      {/* ── Action Panel Overlay ──────────────────────────────── */}
+      {showActions && formActions.length > 0 && (
+        <ActionPanelOverlay
+          actions={formActions}
+          onClose={() => setShowActions(false)}
+          onExecute={handleActionExecute}
+        />
+      )}
     </FormContext.Provider>
+  );
+}
+
+// ── Form field helper: horizontal row layout ─────────────────────────
+function FormFieldRow({ title, children, error, info }: { title?: string; children: React.ReactNode; error?: string; info?: string }) {
+  return (
+    <div className="flex items-start gap-4">
+      <div className="w-24 flex-shrink-0 pt-2 text-right">
+        {title && <label className="text-[13px] text-white/40">{title}</label>}
+      </div>
+      <div className="flex-1 min-w-0">
+        {children}
+        {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
+        {info && <p className="text-xs text-white/30 mt-1">{info}</p>}
+      </div>
+    </div>
   );
 }
 
@@ -1580,13 +1864,10 @@ FormComponent.TextField = ({ id, title, placeholder, value, onChange, defaultVal
   };
 
   return (
-    <div className="mb-3">
-      {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+    <FormFieldRow title={title} error={fieldError} info={info}>
       <input type="text" placeholder={placeholder} value={fieldValue} onChange={handleChange}
-        className="w-full bg-white/[0.06] border border-white/[0.08] rounded px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" autoFocus={autoFocus} />
-      {fieldError && <p className="text-xs text-red-400 mt-1">{fieldError}</p>}
-      {info && <p className="text-xs text-white/30 mt-1">{info}</p>}
-    </div>
+        className="w-full bg-white/[0.06] border border-white/[0.08] rounded-md px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" autoFocus={autoFocus} />
+    </FormFieldRow>
   );
 };
 
@@ -1602,12 +1883,10 @@ FormComponent.TextArea = ({ id, title, placeholder, value, onChange, defaultValu
   };
 
   return (
-    <div className="mb-3">
-      {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+    <FormFieldRow title={title} error={fieldError}>
       <textarea placeholder={placeholder} value={fieldValue} onChange={handleChange} rows={4}
-        className="w-full bg-white/[0.06] border border-white/[0.08] rounded px-3 py-1.5 text-sm text-white outline-none focus:border-white/20 resize-y" />
-      {fieldError && <p className="text-xs text-red-400 mt-1">{fieldError}</p>}
-    </div>
+        className="w-full bg-white/[0.06] border border-white/[0.08] rounded-md px-3 py-1.5 text-sm text-white outline-none focus:border-white/20 resize-y" />
+    </FormFieldRow>
   );
 };
 
@@ -1623,12 +1902,10 @@ FormComponent.PasswordField = ({ id, title, placeholder, value, onChange, defaul
   };
 
   return (
-    <div className="mb-3">
-      {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+    <FormFieldRow title={title} error={fieldError}>
       <input type="password" placeholder={placeholder} value={fieldValue} onChange={handleChange}
-        className="w-full bg-white/[0.06] border border-white/[0.08] rounded px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" />
-      {fieldError && <p className="text-xs text-red-400 mt-1">{fieldError}</p>}
-    </div>
+        className="w-full bg-white/[0.06] border border-white/[0.08] rounded-md px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" />
+    </FormFieldRow>
   );
 };
 
@@ -1644,11 +1921,12 @@ FormComponent.Checkbox = ({ id, title, label, value, onChange, defaultValue, err
   };
 
   return (
-    <label className="flex items-center gap-2 mb-3 text-sm text-white/80 cursor-pointer">
-      <input type="checkbox" checked={fieldValue} onChange={handleChange} className="accent-blue-500" />
-      {title || label}
-      {fieldError && <span className="text-xs text-red-400 ml-2">{fieldError}</span>}
-    </label>
+    <FormFieldRow title={title || label} error={fieldError}>
+      <label className="flex items-center gap-2 py-1.5 text-sm text-white/80 cursor-pointer">
+        <input type="checkbox" checked={fieldValue} onChange={handleChange} className="accent-blue-500" />
+        {label && title ? label : null}
+      </label>
+    </FormFieldRow>
   );
 };
 
@@ -1665,14 +1943,12 @@ FormComponent.Dropdown = Object.assign(
     };
 
     return (
-      <div className="mb-3">
-        {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+      <FormFieldRow title={title} error={fieldError}>
         <select value={fieldValue} onChange={handleChange}
-          className="w-full bg-white/[0.06] border border-white/[0.08] rounded px-3 py-1.5 text-sm text-white outline-none">
+          className="w-full bg-white/[0.06] border border-white/[0.08] rounded-md px-3 py-1.5 text-sm text-white outline-none">
           {children}
         </select>
-        {fieldError && <p className="text-xs text-red-400 mt-1">{fieldError}</p>}
-      </div>
+      </FormFieldRow>
     );
   },
   {
@@ -1683,37 +1959,37 @@ FormComponent.Dropdown = Object.assign(
 
 FormComponent.DatePicker = Object.assign(
   ({ id, title, value, onChange, defaultValue, error, min, max, type }: any) => (
-    <div className="mb-3">
-      {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+    <FormFieldRow title={title} error={error}>
       <input type={type === 'date' ? 'date' : 'datetime-local'} value={value ? (value instanceof Date ? value.toISOString().slice(0, 16) : value) : ''}
         onChange={(e: any) => onChange?.(e.target.value ? new Date(e.target.value) : null)}
-        className="w-full bg-white/[0.06] border border-white/[0.08] rounded px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" />
-      {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-    </div>
+        className="w-full bg-white/[0.06] border border-white/[0.08] rounded-md px-3 py-1.5 text-sm text-white outline-none focus:border-white/20" />
+    </FormFieldRow>
   ),
   { Type: { Date: 'date', DateTime: 'datetime' }, isFullDay: false }
 );
 
-FormComponent.Description = ({ text, title }: any) => <p className="text-xs text-white/40 mb-3">{title ? <strong>{title}: </strong> : null}{text}</p>;
-FormComponent.Separator = () => <hr className="border-white/[0.06] my-3" />;
+FormComponent.Description = ({ text, title }: any) => (
+  <div className="flex items-start gap-4">
+    <div className="w-24 flex-shrink-0" />
+    <p className="text-xs text-white/40 flex-1">{title ? <strong>{title}: </strong> : null}{text}</p>
+  </div>
+);
+
+FormComponent.Separator = () => <hr className="border-white/[0.06] my-2" />;
 
 FormComponent.TagPicker = Object.assign(
   ({ id, title, children, value, onChange, error }: any) => (
-    <div className="mb-3">
-      {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
+    <FormFieldRow title={title} error={error}>
       <div className="flex flex-wrap gap-1">{children}</div>
-      {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-    </div>
+    </FormFieldRow>
   ),
   { Item: ({ value, title }: any) => <span className="text-xs bg-white/10 px-1.5 py-0.5 rounded text-white/60">{title}</span> }
 );
 
 FormComponent.FilePicker = ({ id, title, value, onChange, allowMultipleSelection, canChooseDirectories, canChooseFiles, error }: any) => (
-  <div className="mb-3">
-    {title && <label className="text-xs text-white/50 mb-1 block">{title}</label>}
-    <div className="text-xs text-white/30">File picker not available</div>
-    {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
-  </div>
+  <FormFieldRow title={title} error={error}>
+    <div className="text-xs text-white/30 py-1.5">File picker not available</div>
+  </FormFieldRow>
 );
 
 FormComponent.LinkAccessory = ({ text, target }: any) => (
@@ -2587,3 +2863,4 @@ export const BrowserExtension = {
 export async function updateCommandMetadata(metadata: { subtitle?: string }): Promise<void> {
   // noop in SuperCommand
 }
+

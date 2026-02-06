@@ -294,44 +294,96 @@ class BufferPolyfill extends Uint8Array {
   }
 }
 
-// ── fs stub ─────────────────────────────────────────────────────
-const fakeStatResult = {
-  isFile: () => false,
-  isDirectory: () => false,
-  isSymbolicLink: () => false,
-  isBlockDevice: () => false,
-  isCharacterDevice: () => false,
-  isFIFO: () => false,
-  isSocket: () => false,
-  size: 0,
-  mtime: new Date(0),
-  atime: new Date(0),
-  ctime: new Date(0),
-  birthtime: new Date(0),
-  mode: 0,
-  uid: 0,
-  gid: 0,
-  dev: 0,
-  ino: 0,
-  nlink: 0,
-};
+// ── fs stub (localStorage-backed for persistence) ────────────────
+// Extensions like todo-list use fs.readFileSync/writeFileSync for data.
+// We back basic file operations with localStorage so data persists.
+
+const FS_PREFIX = 'sc-fs:';
+
+function fsStatResult(exists: boolean, isDir = false) {
+  return {
+    isFile: () => exists && !isDir,
+    isDirectory: () => isDir,
+    isSymbolicLink: () => false,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+    size: exists ? (localStorage.getItem(FS_PREFIX + '') || '').length : 0,
+    mtime: new Date(),
+    atime: new Date(),
+    ctime: new Date(),
+    birthtime: new Date(),
+    mode: 0o644,
+    uid: 501,
+    gid: 20,
+    dev: 0,
+    ino: 0,
+    nlink: 1,
+  };
+}
 
 const fsStub: Record<string, any> = {
-  existsSync: () => false,
-  readFileSync: (_p: string, _opts?: any) => '',
-  writeFileSync: noop,
-  mkdirSync: noop,
-  readdirSync: () => [],
-  statSync: () => ({ ...fakeStatResult }),
-  lstatSync: () => ({ ...fakeStatResult }),
-  realpathSync: (p: string) => p, // Return path as-is
-  unlinkSync: noop,
+  existsSync: (p: string) => localStorage.getItem(FS_PREFIX + p) !== null,
+  readFileSync: (p: string, opts?: any) => {
+    const content = localStorage.getItem(FS_PREFIX + p);
+    if (content === null) {
+      const err: any = new Error(`ENOENT: no such file or directory, open '${p}'`);
+      err.code = 'ENOENT';
+      err.errno = -2;
+      err.syscall = 'open';
+      err.path = p;
+      throw err;
+    }
+    // If encoding is specified (or opts is a string), return string
+    if (opts?.encoding || typeof opts === 'string') return content;
+    // Otherwise return a Buffer-like object
+    return BufferPolyfill.from(content);
+  },
+  writeFileSync: (p: string, data: any) => {
+    const str = typeof data === 'string' ? data : (data?.toString?.() ?? String(data));
+    localStorage.setItem(FS_PREFIX + p, str);
+  },
+  mkdirSync: noop, // Directories are implicit with localStorage
+  readdirSync: (p: string) => {
+    const prefix = FS_PREFIX + (p.endsWith('/') ? p : p + '/');
+    const results: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) {
+        const rest = key.slice(prefix.length);
+        const firstSlash = rest.indexOf('/');
+        const entry = firstSlash === -1 ? rest : rest.slice(0, firstSlash);
+        if (entry && !results.includes(entry)) results.push(entry);
+      }
+    }
+    return results;
+  },
+  statSync: (p: string) => fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null),
+  lstatSync: (p: string) => fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null),
+  realpathSync: (p: string) => p,
+  unlinkSync: (p: string) => { localStorage.removeItem(FS_PREFIX + p); },
   rmdirSync: noop,
-  rmSync: noop,
-  renameSync: noop,
-  copyFileSync: noop,
+  rmSync: (p: string) => { localStorage.removeItem(FS_PREFIX + p); },
+  renameSync: (oldPath: string, newPath: string) => {
+    const content = localStorage.getItem(FS_PREFIX + oldPath);
+    if (content !== null) {
+      localStorage.setItem(FS_PREFIX + newPath, content);
+      localStorage.removeItem(FS_PREFIX + oldPath);
+    }
+  },
+  copyFileSync: (src: string, dest: string) => {
+    const content = localStorage.getItem(FS_PREFIX + src);
+    if (content !== null) localStorage.setItem(FS_PREFIX + dest, content);
+  },
   chmodSync: noop,
-  accessSync: noop,
+  accessSync: (p: string) => {
+    if (localStorage.getItem(FS_PREFIX + p) === null) {
+      const err: any = new Error(`ENOENT: no such file or directory, access '${p}'`);
+      err.code = 'ENOENT';
+      throw err;
+    }
+  },
   openSync: () => 0,
   closeSync: noop,
   readSync: () => 0,
@@ -342,39 +394,95 @@ const fsStub: Record<string, any> = {
     return s;
   },
   createWriteStream: () => new (nodeBuiltinStubs?.stream?.Writable || class {})(),
-  readFile: noopCb,
-  writeFile: noopCb,
-  mkdir: noopCb,
-  access: noopCb,
-  stat: noopCb,
-  lstat: noopCb,
+  readFile: (p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    const content = localStorage.getItem(FS_PREFIX + p);
+    if (typeof cb === 'function') {
+      if (content === null) {
+        const err: any = new Error(`ENOENT: no such file or directory, open '${p}'`);
+        err.code = 'ENOENT';
+        cb(err, null);
+      } else {
+        cb(null, content);
+      }
+    }
+  },
+  writeFile: (p: string, data: any, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    const str = typeof data === 'string' ? data : (data?.toString?.() ?? String(data));
+    localStorage.setItem(FS_PREFIX + p, str);
+    if (typeof cb === 'function') cb(null);
+  },
+  mkdir: (_p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') cb(null);
+  },
+  access: (p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') {
+      if (localStorage.getItem(FS_PREFIX + p) !== null) cb(null);
+      else { const err: any = new Error('ENOENT'); err.code = 'ENOENT'; cb(err); }
+    }
+  },
+  stat: (p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') cb(null, fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null));
+  },
+  lstat: (p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === 'function') cb(null, fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null));
+  },
   realpath: (p: string, ...args: any[]) => {
     const cb = args[args.length - 1];
     if (typeof cb === 'function') cb(null, p);
   },
-  readdir: (...args: any[]) => {
+  readdir: (p: string, ...args: any[]) => {
     const cb = args[args.length - 1];
-    if (typeof cb === 'function') cb(null, []);
+    if (typeof cb === 'function') cb(null, fsStub.readdirSync(p));
   },
-  unlink: noopCb,
-  rename: noopCb,
+  unlink: (p: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    localStorage.removeItem(FS_PREFIX + p);
+    if (typeof cb === 'function') cb(null);
+  },
+  rename: (oldPath: string, newPath: string, ...args: any[]) => {
+    const cb = args[args.length - 1];
+    fsStub.renameSync(oldPath, newPath);
+    if (typeof cb === 'function') cb(null);
+  },
   watch: () => ({ close: noop, on: noop }),
   watchFile: noop,
   unwatchFile: noop,
   constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
   promises: {
-    readFile: noopAsync,
-    writeFile: noopAsync,
+    readFile: async (p: string, opts?: any) => {
+      const content = localStorage.getItem(FS_PREFIX + p);
+      if (content === null) {
+        const err: any = new Error(`ENOENT: no such file or directory, open '${p}'`);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      if (opts?.encoding || typeof opts === 'string') return content;
+      return BufferPolyfill.from(content);
+    },
+    writeFile: async (p: string, data: any) => {
+      const str = typeof data === 'string' ? data : (data?.toString?.() ?? String(data));
+      localStorage.setItem(FS_PREFIX + p, str);
+    },
     mkdir: noopAsync,
-    readdir: () => Promise.resolve([]),
-    stat: () => Promise.resolve({ ...fakeStatResult }),
-    lstat: () => Promise.resolve({ ...fakeStatResult }),
-    realpath: (p: string) => Promise.resolve(p),
-    access: noopAsync,
-    unlink: noopAsync,
-    rm: noopAsync,
-    rename: noopAsync,
-    copyFile: noopAsync,
+    readdir: async (p: string) => fsStub.readdirSync(p),
+    stat: async (p: string) => fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null),
+    lstat: async (p: string) => fsStatResult(localStorage.getItem(FS_PREFIX + p) !== null),
+    realpath: async (p: string) => p,
+    access: async (p: string) => {
+      if (localStorage.getItem(FS_PREFIX + p) === null) {
+        const err: any = new Error('ENOENT'); err.code = 'ENOENT'; throw err;
+      }
+    },
+    unlink: async (p: string) => { localStorage.removeItem(FS_PREFIX + p); },
+    rm: async (p: string) => { localStorage.removeItem(FS_PREFIX + p); },
+    rename: async (oldPath: string, newPath: string) => { fsStub.renameSync(oldPath, newPath); },
+    copyFile: async (src: string, dest: string) => { fsStub.copyFileSync(src, dest); },
     chmod: noopAsync,
     open: noopAsync,
   },
