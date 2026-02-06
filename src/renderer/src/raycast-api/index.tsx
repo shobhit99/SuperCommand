@@ -1478,20 +1478,36 @@ function ListComponent({
         e.preventDefault();
         pop();
         break;
-      default: {
-        // Check extension-defined keyboard shortcuts on all collected actions
-        if (e.repeat) break;
-        for (const action of selectedActions) {
-          if (action.shortcut && matchesShortcut(e, action.shortcut)) {
-            e.preventDefault();
-            action.execute();
-            break;
-          }
-        }
-        break;
-      }
     }
-  }, [filteredItems.length, selectedIdx, pop, primaryAction, selectedActions, showActions]);
+  }, [filteredItems.length, selectedIdx, pop, primaryAction, showActions]);
+
+  // ── Window-level shortcut listener ─────────────────────────────
+  // Extension-defined shortcuts (⌘E, ⌘D, ⌘T, etc.) must be caught
+  // at the window level in the capture phase, BEFORE the browser or
+  // Electron can intercept them. React's onKeyDown on a div sometimes
+  // misses modifier-key combos due to native handling.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Only process when the action panel is NOT open
+      if (showActions) return;
+      // Skip pure navigation/control keys and ⌘K (handled by React handler)
+      if (e.key === 'k' && e.metaKey) return;
+      // Only check shortcuts when a modifier key is active (not plain typing)
+      if (!e.metaKey && !e.altKey && !e.ctrlKey) return;
+      if (e.repeat) return;
+
+      for (const action of selectedActions) {
+        if (action.shortcut && matchesShortcut(e, action.shortcut)) {
+          e.preventDefault();
+          e.stopPropagation();
+          action.execute();
+          return;
+        }
+      }
+    };
+    window.addEventListener('keydown', handler, true); // capture phase
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [selectedActions, showActions]);
 
   // ── Selection stabilization ─────────────────────────────────────
   // When items change (e.g. mark complete moves an item between sections),

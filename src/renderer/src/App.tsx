@@ -73,6 +73,8 @@ function getCategoryLabel(category: string): string {
   }
 }
 
+const LAST_EXT_KEY = 'sc-last-extension';
+
 const App: React.FC = () => {
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -82,6 +84,8 @@ const App: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const extensionViewRef = useRef<ExtensionBundle | null>(null);
+  extensionViewRef.current = extensionView;
 
   const fetchCommands = useCallback(async () => {
     setIsLoading(true);
@@ -90,13 +94,35 @@ const App: React.FC = () => {
     setIsLoading(false);
   }, []);
 
+  // Restore last opened extension on initial mount (app restart)
+  useEffect(() => {
+    const saved = localStorage.getItem(LAST_EXT_KEY);
+    if (saved) {
+      try {
+        const { extName, cmdName } = JSON.parse(saved);
+        window.electron.runExtension(extName, cmdName).then(result => {
+          if (result && result.code) {
+            setExtensionView(result);
+          } else {
+            localStorage.removeItem(LAST_EXT_KEY);
+          }
+        }).catch(() => {
+          localStorage.removeItem(LAST_EXT_KEY);
+        });
+      } catch {
+        localStorage.removeItem(LAST_EXT_KEY);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     fetchCommands();
 
     window.electron.onWindowShown(() => {
+      // If an extension is open, keep it alive — don't reset
+      if (extensionViewRef.current) return;
       setSearchQuery('');
       setSelectedIndex(0);
-      setExtensionView(null);
       // Re-fetch commands every time the window is shown
       // so newly installed extensions appear immediately
       fetchCommands();
@@ -179,6 +205,7 @@ const App: React.FC = () => {
         const result = await window.electron.runExtension(extName, cmdName);
         if (result && result.code) {
           setExtensionView(result);
+          localStorage.setItem(LAST_EXT_KEY, JSON.stringify({ extName, cmdName }));
           return;
         }
         const errMsg = result?.error || 'Failed to build extension';
@@ -221,6 +248,7 @@ const App: React.FC = () => {
             preferences={(extensionView as any).preferences}
             onClose={() => {
               setExtensionView(null);
+              localStorage.removeItem(LAST_EXT_KEY);
               setSearchQuery('');
               setSelectedIndex(0);
               setTimeout(() => inputRef.current?.focus(), 50);
