@@ -674,7 +674,7 @@ export async function getAvailableCommands(): Promise<CommandInfo[]> {
   cacheTimestamp = now;
 
   console.log(
-    `Discovered ${apps.length} apps, ${settings.length} settings panes in ${Date.now() - t0}ms`
+    `Discovered ${apps.length} apps, ${settings.length} settings panes, ${extensionCommands.length} extension commands in ${Date.now() - t0}ms`
   );
 
   return cachedCommands;

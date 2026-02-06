@@ -11,7 +11,7 @@
  */
 
 import * as path from 'path';
-import { getAvailableCommands, executeCommand } from './commands';
+import { getAvailableCommands, executeCommand, invalidateCache } from './commands';
 import { loadSettings, saveSettings } from './settings-store';
 import type { AppSettings } from './settings-store';
 import {
@@ -20,7 +20,7 @@ import {
   installExtension,
   uninstallExtension,
 } from './extension-registry';
-import { getExtensionBundle } from './extension-runner';
+import { getExtensionBundle, buildAllCommands } from './extension-runner';
 
 const electron = require('electron');
 const { app, BrowserWindow, globalShortcut, ipcMain, screen, shell } = electron;
@@ -429,14 +429,24 @@ app.whenReady().then(() => {
   ipcMain.handle(
     'install-extension',
     async (_event: any, name: string) => {
-      return await installExtension(name);
+      const success = await installExtension(name);
+      if (success) {
+        // Invalidate command cache so new extensions appear in the launcher
+        invalidateCache();
+      }
+      return success;
     }
   );
 
   ipcMain.handle(
     'uninstall-extension',
     async (_event: any, name: string) => {
-      return await uninstallExtension(name);
+      const success = await uninstallExtension(name);
+      if (success) {
+        // Invalidate command cache so removed extensions disappear
+        invalidateCache();
+      }
+      return success;
     }
   );
 
