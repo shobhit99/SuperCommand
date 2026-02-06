@@ -234,9 +234,25 @@ export async function confirmAlert(options: {
   icon?: any;
   rememberUserChoice?: boolean;
 }): Promise<boolean> {
-  // In a real implementation this would show a modal.
-  // For compatibility, we auto-confirm.
-  return true;
+  const confirmed = window.confirm(`${options.title}${options.message ? '\n\n' + options.message : ''}`);
+  if (confirmed) {
+    options.primaryAction?.onAction?.();
+    return true;
+  } else {
+    options.dismissAction?.onAction?.();
+    return false;
+  }
+}
+
+// =====================================================================
+// ─── clearSearchBar ─────────────────────────────────────────────────
+// =====================================================================
+
+let _clearSearchBarCallback: (() => void) | null = null;
+
+export function clearSearchBar(options?: { forceScrollToTop?: boolean }): Promise<void> {
+  _clearSearchBarCallback?.();
+  return Promise.resolve();
 }
 
 // =====================================================================
@@ -674,93 +690,51 @@ export function openCommandPreferences(): void {
 // ─── ActionPanel ────────────────────────────────────────────────────
 // =====================================================================
 
-function ActionPanelComponent({ children }: { children?: React.ReactNode; title?: string }) {
-  return <>{children}</>;
+// ActionPanel & Action components are "data-bearing" elements.
+// They are never rendered directly — instead, the List/Detail extracts
+// action data from them and renders the ActionPanelOverlay.
+
+function ActionPanelComponent({ children, title }: { children?: React.ReactNode; title?: string }) {
+  return null; // Never rendered
+}
+function ActionPanelSection({ children, title }: { children?: React.ReactNode; title?: string }) {
+  return null; // Never rendered
+}
+function ActionPanelSubmenu({ children, title, icon }: { children?: React.ReactNode; title?: string; icon?: any }) {
+  return null; // Never rendered
 }
 
 // =====================================================================
 // ─── Action ─────────────────────────────────────────────────────────
 // =====================================================================
 
-function ActionComponent({ title, onAction }: { title?: string; icon?: any; shortcut?: any; onAction?: () => void; style?: any; [key: string]: any }) {
-  return (
-    <button onClick={onAction} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title}
-    </button>
-  );
-}
+// All action components are data-bearing — never rendered directly.
+// Their props are extracted by extractActionsFromElement().
 
-function ActionCopyToClipboard({ content, title, ...rest }: { content: any; title?: string; [key: string]: any }) {
-  return (
-    <button onClick={() => Clipboard.copy(String(content))} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Copy to Clipboard'}
-    </button>
-  );
+function ActionComponent(_props: { title?: string; icon?: any; shortcut?: any; onAction?: () => void; style?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionOpenInBrowser({ url, title, ...rest }: { url: string; title?: string; [key: string]: any }) {
-  return (
-    <button onClick={() => (window as any).electron?.openUrl?.(url)} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Open in Browser'}
-    </button>
-  );
+function ActionCopyToClipboard(_props: { content: any; title?: string; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionPush({ title, target, ...rest }: { title?: string; target: React.ReactElement; [key: string]: any }) {
-  const { push } = useNavigation();
-  return (
-    <button onClick={() => push(target)} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Open'}
-    </button>
-  );
+function ActionOpenInBrowser(_props: { url: string; title?: string; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionSubmitForm({ title, onSubmit, ...rest }: { title?: string; onSubmit?: (values: any) => void; [key: string]: any }) {
-  const handleSubmit = () => {
-    const values = getFormValues();
-    const errors = getFormErrors();
-    // Don't submit if there are errors
-    if (Object.keys(errors).length > 0) {
-      showToast({ title: 'Please fix form errors', style: Toast.Style.Failure });
-      return;
-    }
-    onSubmit?.(values);
-  };
-
-  return (
-    <button onClick={handleSubmit} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Submit'}
-    </button>
-  );
+function ActionPush(_props: { title?: string; target: React.ReactElement; icon?: any; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionTrash({ title, paths, onTrash, ...rest }: { title?: string; paths: string[]; onTrash?: () => void; [key: string]: any }) {
-  return (
-    <button onClick={() => { trash(paths); onTrash?.(); }} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Move to Trash'}
-    </button>
-  );
+function ActionSubmitForm(_props: { title?: string; onSubmit?: (values: any) => void; icon?: any; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionPickDate({ title, onChange, ...rest }: { title?: string; onChange?: (date: Date | null) => void; [key: string]: any }) {
-  return (
-    <button onClick={() => onChange?.(new Date())} className="w-full text-left px-3 py-1.5 text-sm text-white/80 hover:bg-white/[0.06] rounded transition-colors">
-      {title || 'Pick Date'}
-    </button>
-  );
+function ActionTrash(_props: { title?: string; paths?: string[]; onTrash?: () => void; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionCreateSnippet(props: any) {
-  return <ActionComponent title={props.title || 'Create Snippet'} onAction={props.onAction} />;
+function ActionPickDate(_props: { title?: string; onChange?: (date: Date | null) => void; shortcut?: any; [key: string]: any }) {
+  return null;
 }
-
-function ActionCreateQuicklink(props: any) {
-  return <ActionComponent title={props.title || 'Create Quicklink'} onAction={props.onAction} />;
-}
-
-function ActionToggleSidebar(props: any) {
-  return <ActionComponent title={props.title || 'Toggle Sidebar'} onAction={props.onAction} />;
-}
+function ActionCreateSnippet(_props: any) { return null; }
+function ActionCreateQuicklink(_props: any) { return null; }
+function ActionToggleSidebar(_props: any) { return null; }
 
 export const Action = Object.assign(ActionComponent, {
   CopyToClipboard: ActionCopyToClipboard,
@@ -782,37 +756,292 @@ export const Action = Object.assign(ActionComponent, {
 });
 
 export const ActionPanel = Object.assign(ActionPanelComponent, {
-  Section: ({ children, title }: { children?: React.ReactNode; title?: string }) => <>{children}</>,
-  Submenu: ({ children, title, icon }: { children?: React.ReactNode; title?: string; icon?: any }) => <>{children}</>,
+  Section: ActionPanelSection,
+  Submenu: ActionPanelSubmenu,
 });
+
+// ── Extract action data from ActionPanel element tree ────────────────
+
+interface ExtractedAction {
+  title: string;
+  icon?: any;
+  shortcut?: { modifiers?: string[]; key?: string };
+  style?: string;
+  sectionTitle?: string;
+  execute: () => void;
+}
+
+function extractActionsFromElement(el: React.ReactElement | undefined | null): ExtractedAction[] {
+  if (!el) return [];
+  const result: ExtractedAction[] = [];
+
+  function makeExecutor(p: any): () => void {
+    return () => {
+      if (p.onAction) { p.onAction(); return; }
+      if (p.onSubmit) { p.onSubmit(getFormValues()); return; }
+      if (p.content !== undefined) {
+        Clipboard.copy(String(p.content));
+        showToast({ title: 'Copied to clipboard', style: ToastStyle.Success });
+        return;
+      }
+      if (p.url) { (window as any).electron?.openUrl?.(p.url); return; }
+      if (p.target && React.isValidElement(p.target)) {
+        getGlobalNavigation().push(p.target);
+        return;
+      }
+      if (p.paths) { trash(p.paths); p.onTrash?.(); return; }
+    };
+  }
+
+  function walk(nodes: React.ReactNode, sectionTitle?: string) {
+    React.Children.forEach(nodes, (child) => {
+      if (!React.isValidElement(child)) return;
+      const p = child.props as any;
+      // Is this a section-like container? (has children but also title)
+      const hasChildren = p.children != null;
+      const isActionLike = p.onAction || p.onSubmit || p.content !== undefined || p.url || p.target || p.paths;
+
+      if (isActionLike || (p.title && !hasChildren)) {
+        // It's an action
+        result.push({
+          title: p.title || 'Action',
+          icon: p.icon,
+          shortcut: p.shortcut,
+          style: p.style,
+          sectionTitle,
+          execute: makeExecutor(p),
+        });
+      } else if (hasChildren) {
+        // It's a container (ActionPanel, Section, Submenu, Fragment)
+        walk(p.children, p.title || sectionTitle);
+      }
+    });
+  }
+
+  // Walk the ActionPanel's children
+  const rootProps = el.props as any;
+  if (rootProps?.children) {
+    walk(rootProps.children);
+  }
+  return result;
+}
+
+// ── Shortcut rendering helper ────────────────────────────────────────
+
+function renderShortcut(shortcut?: { modifiers?: string[]; key?: string }): React.ReactNode {
+  if (!shortcut?.key) return null;
+  const parts: string[] = [];
+  for (const mod of shortcut.modifiers || []) {
+    if (mod === 'cmd') parts.push('⌘');
+    else if (mod === 'opt' || mod === 'alt') parts.push('⌥');
+    else if (mod === 'shift') parts.push('⇧');
+    else if (mod === 'ctrl') parts.push('⌃');
+  }
+  return (
+    <span className="flex items-center gap-0.5 ml-auto">
+      {parts.map((s, i) => (
+        <kbd key={i} className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/40 font-medium">{s}</kbd>
+      ))}
+      <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/40 font-medium">{shortcut.key.toUpperCase()}</kbd>
+    </span>
+  );
+}
+
+// ── ActionPanelOverlay (the ⌘K dropdown) ─────────────────────────────
+
+function ActionPanelOverlay({
+  actions,
+  onClose,
+  onExecute,
+}: {
+  actions: ExtractedAction[];
+  onClose: () => void;
+  onExecute: (action: ExtractedAction) => void;
+}) {
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [filter, setFilter] = useState('');
+  const filterRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const filteredActions = filter
+    ? actions.filter(a => a.title.toLowerCase().includes(filter.toLowerCase()))
+    : actions;
+
+  useEffect(() => { filterRef.current?.focus(); }, []);
+  useEffect(() => { setSelectedIdx(0); }, [filter]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    panelRef.current?.querySelector(`[data-action-idx="${selectedIdx}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); setSelectedIdx(p => Math.min(p + 1, filteredActions.length - 1)); break;
+      case 'ArrowUp': e.preventDefault(); setSelectedIdx(p => Math.max(p - 1, 0)); break;
+      case 'Enter': e.preventDefault(); if (filteredActions[selectedIdx]) onExecute(filteredActions[selectedIdx]); break;
+      case 'Escape': e.preventDefault(); onClose(); break;
+    }
+  };
+
+  // Group by section
+  const groups: { title?: string; items: { action: ExtractedAction; idx: number }[] }[] = [];
+  let gIdx = 0;
+  let curTitle: string | undefined | null = null;
+  for (const action of filteredActions) {
+    if (action.sectionTitle !== curTitle || groups.length === 0) {
+      curTitle = action.sectionTitle;
+      groups.push({ title: action.sectionTitle, items: [] });
+    }
+    groups[groups.length - 1].items.push({ action, idx: gIdx++ });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose} onKeyDown={handleKeyDown} tabIndex={-1}
+      style={{ background: 'rgba(0,0,0,0.15)' }}>
+      <div
+        ref={panelRef}
+        className="absolute bottom-12 right-3 w-80 max-h-[65vh] rounded-xl overflow-hidden flex flex-col shadow-2xl"
+        style={{ background: 'rgba(30,30,34,0.97)', backdropFilter: 'blur(40px)', border: '1px solid rgba(255,255,255,0.08)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Action list */}
+        <div className="flex-1 overflow-y-auto py-1">
+          {filteredActions.length === 0 ? (
+            <div className="px-3 py-4 text-center text-white/30 text-sm">No matching actions</div>
+          ) : groups.map((group, gi) => (
+            <div key={gi}>
+              {gi > 0 && <hr className="border-white/[0.06] my-0.5" />}
+              {group.title && (
+                <div className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wider text-white/25 font-medium select-none">{group.title}</div>
+              )}
+              {group.items.map(({ action, idx }) => (
+                <div
+                  key={idx}
+                  data-action-idx={idx}
+                  className={`mx-1 px-2.5 py-1.5 rounded-lg flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    idx === selectedIdx ? 'bg-blue-500/90' : 'hover:bg-white/[0.06]'
+                  }`}
+                  onClick={() => onExecute(action)}
+                  onMouseMove={() => setSelectedIdx(idx)}
+                >
+                  {action.icon && (
+                    <span className={`w-4 h-4 flex-shrink-0 flex items-center justify-center text-xs ${idx === selectedIdx ? 'text-white' : 'text-white/50'}`}>
+                      {renderIcon(action.icon, 'w-4 h-4')}
+                    </span>
+                  )}
+                  <span className={`flex-1 text-[13px] truncate ${
+                    action.style === 'destructive'
+                      ? idx === selectedIdx ? 'text-white' : 'text-red-400'
+                      : idx === selectedIdx ? 'text-white' : 'text-white/80'
+                  }`}>{action.title}</span>
+                  <span className={`flex items-center gap-0.5 ${idx === selectedIdx ? 'text-white/70' : 'text-white/25'}`}>
+                    {idx === 0 ? (
+                      <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.08] text-[10px] font-medium">↩</kbd>
+                    ) : renderShortcut(action.shortcut)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        {/* Search input */}
+        <div className="border-t border-white/[0.06] px-3 py-2">
+          <input
+            ref={filterRef}
+            type="text"
+            placeholder="Search for actions…"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            className="w-full bg-transparent text-sm text-white/70 placeholder-white/25 outline-none"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // =====================================================================
 // ─── List ───────────────────────────────────────────────────────────
 // =====================================================================
+
+// ── Types ────────────────────────────────────────────────────────────
 
 interface ListItemProps {
   id?: string;
   title: string | { value: string; tooltip?: string };
   subtitle?: string | { value?: string; tooltip?: string };
   icon?: any;
-  accessories?: Array<{ text?: string; icon?: any; tag?: any; date?: any; tooltip?: string }>;
+  accessories?: Array<{ text?: string | { value?: string; color?: string }; icon?: any; tag?: any; date?: any; tooltip?: string }>;
   actions?: React.ReactElement;
   keywords?: string[];
   detail?: React.ReactElement;
 }
 
-function ListItemComponent(_props: ListItemProps) {
-  return null;
+// ── Item registration context ────────────────────────────────────────
+// List.Item components register themselves with the parent List via
+// this context. This solves the problem where custom wrapper components
+// (like TodoSection) prevent static tree-walking from finding items.
+
+let _itemOrderCounter = 0;
+
+interface ItemRegistration {
+  id: string;
+  props: ListItemProps;
+  sectionTitle?: string;
+  order: number;
 }
+
+interface ListRegistryAPI {
+  set: (id: string, data: Omit<ItemRegistration, 'id'>) => void;
+  delete: (id: string) => void;
+}
+
+const ListRegistryContext = createContext<ListRegistryAPI>({
+  set: () => {},
+  delete: () => {},
+});
+
+const ListSectionTitleContext = createContext<string | undefined>(undefined);
+
+// ── List.Item — registers with parent List via context ───────────────
+
+function ListItemComponent(props: ListItemProps) {
+  const registry = useContext(ListRegistryContext);
+  const sectionTitle = useContext(ListSectionTitleContext);
+  const stableId = useRef(props.id || `__li_${++_itemOrderCounter}`).current;
+  const order = useRef(++_itemOrderCounter).current;
+
+  // Register synchronously (ref update, no state change)
+  registry.set(stableId, { props, sectionTitle, order });
+
+  // Unregister on unmount only
+  useEffect(() => {
+    return () => registry.delete(stableId);
+  }, [stableId, registry]);
+
+  return null; // Rendering is done by the parent List
+}
+
+// ── List.Item.Accessory type (for type-compatibility) ────────────────
+type ListItemAccessory = { text?: string | { value?: string; color?: string }; icon?: any; tag?: any; date?: any; tooltip?: string };
+(ListItemComponent as any).Accessory = {} as ListItemAccessory;
+(ListItemComponent as any).Props = {} as ListItemProps;
+
+// ── ListItemRenderer — the actual visual row ────────────────────────
 
 function ListItemRenderer({
   title, subtitle, icon, accessories, isSelected, dataIdx, onSelect, onActivate,
 }: ListItemProps & { isSelected: boolean; dataIdx: number; onSelect: () => void; onActivate: () => void }) {
+  const titleStr = typeof title === 'string' ? title : (title as any)?.value || '';
+  const subtitleStr = typeof subtitle === 'string' ? subtitle : (subtitle as any)?.value || '';
+
   return (
     <div
       data-idx={dataIdx}
-      className={`px-3 py-1.5 rounded-lg cursor-pointer transition-all ${
-        isSelected ? 'bg-white/[0.08] border border-white/[0.1]' : 'border border-transparent hover:bg-white/[0.04]'
+      className={`mx-1 px-2.5 py-[5px] rounded-lg cursor-pointer transition-all ${
+        isSelected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'
       }`}
       onClick={onActivate}
       onMouseMove={onSelect}
@@ -824,95 +1053,227 @@ function ListItemRenderer({
           </div>
         )}
         <div className="flex-1 min-w-0">
-          <span className="text-white text-sm truncate block">{typeof title === 'string' ? title : (title as any)?.value || ''}</span>
+          <span className="text-white/90 text-[13px] truncate block">{titleStr}</span>
         </div>
-        {subtitle && (
-          <span className="text-white/30 text-xs flex-shrink-0 truncate max-w-[200px]">
-            {typeof subtitle === 'string' ? subtitle : (subtitle as any)?.value || ''}
-          </span>
+        {subtitleStr && (
+          <span className="text-white/30 text-xs flex-shrink-0 truncate max-w-[200px]">{subtitleStr}</span>
         )}
-        {accessories?.map((acc, i) => (
-          <span key={i} className="text-white/25 text-[11px] flex-shrink-0 flex items-center gap-1">
-            {acc?.icon && <span className="text-[10px]">{renderIcon(acc.icon, 'w-3 h-3')}</span>}
-            {typeof acc === 'string' ? acc : acc?.text || acc?.tag?.value || (acc?.date ? new Date(acc.date).toLocaleDateString() : '') || ''}
-          </span>
-        ))}
+        {accessories?.map((acc, i) => {
+          const accText = typeof acc?.text === 'string' ? acc.text
+            : typeof acc?.text === 'object' ? acc.text?.value || '' : '';
+          const accTextColor = typeof acc?.text === 'object' ? acc.text?.color : undefined;
+          const tagText = typeof acc?.tag === 'string' ? acc.tag
+            : typeof acc?.tag === 'object' ? acc.tag?.value || '' : '';
+          const tagColor = typeof acc?.tag === 'object' ? acc.tag?.color : undefined;
+          const dateStr = acc?.date ? new Date(acc.date).toLocaleDateString() : '';
+
+          return (
+            <span key={i} className="text-[11px] flex-shrink-0 flex items-center gap-1" style={{ color: accTextColor || tagColor || 'rgba(255,255,255,0.25)' }}>
+              {acc?.icon && <span className="text-[10px]">{renderIcon(acc.icon, 'w-3 h-3')}</span>}
+              {tagText ? (
+                <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: `${tagColor || 'rgba(255,255,255,0.1)'}22`, color: tagColor || 'rgba(255,255,255,0.5)' }}>{tagText}</span>
+              ) : accText || dateStr || ''}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
 }
 
+// ── List.Section — provides section title context ────────────────────
+
 function ListSectionComponent({ children, title }: { children?: React.ReactNode; title?: string; subtitle?: string }) {
   return (
-    <div className="mb-1">
-      {title && <div className="px-3 py-1 text-[11px] uppercase tracking-wider text-white/25 font-medium">{title}</div>}
+    <ListSectionTitleContext.Provider value={title}>
       {children}
-    </div>
+    </ListSectionTitleContext.Provider>
   );
 }
+
+// ── List.EmptyView ───────────────────────────────────────────────────
 
 function ListEmptyView({ title, description, icon, actions }: { title?: string; description?: string; icon?: any; actions?: React.ReactElement }) {
   return (
     <div className="flex flex-col items-center justify-center h-full text-white/40 py-12">
       {icon && <div className="text-2xl mb-2 opacity-40">{typeof icon === 'string' ? icon : '○'}</div>}
       {title && <p className="text-sm font-medium">{title}</p>}
-      {description && <p className="text-xs text-white/25 mt-1">{description}</p>}
+      {description && <p className="text-xs text-white/25 mt-1 max-w-xs text-center">{description}</p>}
     </div>
   );
 }
 
+// ── List.Dropdown — renders as a real <select> ───────────────────────
+
 function ListDropdown({ children, tooltip, storeValue, onChange, value, defaultValue }: any) {
-  return <>{children}</>;
+  const [internalValue, setInternalValue] = useState(value ?? defaultValue ?? '');
+
+  // Extract items from children recursively
+  const items: { title: string; value: string }[] = [];
+  function walkDropdownChildren(nodes: React.ReactNode) {
+    React.Children.forEach(nodes, (child) => {
+      if (!React.isValidElement(child)) return;
+      const p = child.props as any;
+      if (p.value !== undefined && p.title !== undefined) {
+        items.push({ title: p.title, value: p.value });
+      }
+      if (p.children) walkDropdownChildren(p.children);
+    });
+  }
+  walkDropdownChildren(children);
+
+  return (
+    <select
+      value={value ?? internalValue}
+      onChange={e => { const v = e.target.value; setInternalValue(v); onChange?.(v); }}
+      title={tooltip}
+      className="bg-white/[0.06] border border-white/[0.08] rounded-md px-2.5 py-1 text-[13px] text-white/70 outline-none cursor-pointer appearance-none pr-6"
+      style={{
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.3)' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'right 6px center',
+      }}
+    >
+      {items.map(item => <option key={item.value} value={item.value}>{item.title}</option>)}
+    </select>
+  );
 }
-ListDropdown.Item = ({ title, value }: any) => null;
-ListDropdown.Section = ({ children, title }: any) => <>{children}</>;
+ListDropdown.Item = (_props: { title: string; value: string; icon?: any }) => null;
+ListDropdown.Section = ({ children }: { children?: React.ReactNode; title?: string }) => <>{children}</>;
+
+// ── ListComponent (main) ─────────────────────────────────────────────
 
 function ListComponent({
-  children, searchBarPlaceholder, onSearchTextChange, isLoading, searchText: controlledSearch, filtering, isShowingDetail, navigationTitle, searchBarAccessory, throttle, selectedItemId, onSelectionChange,
+  children, searchBarPlaceholder, onSearchTextChange, isLoading,
+  searchText: controlledSearch, filtering, isShowingDetail,
+  navigationTitle, searchBarAccessory, throttle,
+  selectedItemId, onSelectionChange, actions: listActions,
 }: any) {
   const [internalSearch, setInternalSearch] = useState('');
   const searchText = controlledSearch ?? internalSearch;
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [showActions, setShowActions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const { pop } = useNavigation();
 
-  const handleSearchChange = (text: string) => {
+  // ── Item registry (ref-based to avoid render loops) ────────────
+  const registryRef = useRef(new Map<string, ItemRegistration>());
+  const [registryVersion, setRegistryVersion] = useState(0);
+  const pendingRef = useRef(false);
+  const lastSnapshotRef = useRef('');
+
+  const scheduleRegistryUpdate = useCallback(() => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    queueMicrotask(() => {
+      pendingRef.current = false;
+      const entries = Array.from(registryRef.current.values());
+      const snapshot = entries.map(e => {
+        const t = typeof e.props.title === 'string' ? e.props.title : (e.props.title as any)?.value || '';
+        return `${e.id}:${t}:${e.sectionTitle || ''}`;
+      }).join('|');
+      if (snapshot !== lastSnapshotRef.current) {
+        lastSnapshotRef.current = snapshot;
+        setRegistryVersion(v => v + 1);
+      }
+    });
+  }, []);
+
+  const registryAPI = useMemo<ListRegistryAPI>(() => ({
+    set(id, data) {
+      registryRef.current.set(id, { id, ...data });
+      scheduleRegistryUpdate();
+    },
+    delete(id) {
+      if (registryRef.current.has(id)) {
+        registryRef.current.delete(id);
+        scheduleRegistryUpdate();
+      }
+    },
+  }), [scheduleRegistryUpdate]);
+
+  // ── Collect sorted items from registry ─────────────────────────
+  const allItems = useMemo(() => {
+    return Array.from(registryRef.current.values()).sort((a, b) => a.order - b.order);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registryVersion]);
+
+  // ── Filtering ──────────────────────────────────────────────────
+  const filteredItems = useMemo(() => {
+    if (onSearchTextChange || filtering === false || !searchText.trim()) return allItems;
+    const q = searchText.toLowerCase();
+    return allItems.filter(item => {
+      const t = (typeof item.props.title === 'string' ? item.props.title : (item.props.title as any)?.value || '').toLowerCase();
+      const s = (typeof item.props.subtitle === 'string' ? item.props.subtitle : (item.props.subtitle as any)?.value || '').toLowerCase();
+      return t.includes(q) || s.includes(q) || item.props.keywords?.some((k: string) => k.toLowerCase().includes(q));
+    });
+  }, [allItems, searchText, filtering, onSearchTextChange]);
+
+  // ── Search bar control ─────────────────────────────────────────
+  const handleSearchChange = useCallback((text: string) => {
     setInternalSearch(text);
     onSearchTextChange?.(text);
     setSelectedIdx(0);
-  };
+  }, [onSearchTextChange]);
 
-  const items = flattenListItems(children);
-
-  // Built-in filtering when no external handler
-  const filteredItems =
-    (onSearchTextChange || filtering === false || !searchText.trim())
-      ? items
-      : items.filter((item) => {
-          const titleRaw = item.props.title;
-          const subtitleRaw = item.props.subtitle;
-          const t = (typeof titleRaw === 'string' ? titleRaw : (titleRaw as any)?.value || '').toLowerCase();
-          const s = (typeof subtitleRaw === 'string' ? subtitleRaw : (subtitleRaw as any)?.value || '').toLowerCase();
-          const q = searchText.toLowerCase();
-          return t.includes(q) || s.includes(q) ||
-            item.props.keywords?.some((k: string) => k.toLowerCase().includes(q));
-        });
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case 'ArrowDown': e.preventDefault(); setSelectedIdx((p) => Math.min(p + 1, filteredItems.length - 1)); break;
-      case 'ArrowUp': e.preventDefault(); setSelectedIdx((p) => Math.max(p - 1, 0)); break;
-      case 'Enter': e.preventDefault(); if (filteredItems[selectedIdx]) executePrimaryAction(filteredItems[selectedIdx]); break;
-      case 'Escape': e.preventDefault(); pop(); break;
-    }
-  }, [filteredItems, selectedIdx, pop]);
-
+  // Register clearSearchBar callback
   useEffect(() => {
-    const el = listRef.current?.querySelector(`[data-idx="${selectedIdx}"]`);
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    _clearSearchBarCallback = () => handleSearchChange('');
+    return () => { _clearSearchBarCallback = null; };
+  }, [handleSearchChange]);
+
+  // ── Selected item and actions ──────────────────────────────────
+  const selectedItem = filteredItems[selectedIdx];
+  const selectedActions = useMemo(() => {
+    const itemActions = extractActionsFromElement(selectedItem?.props?.actions);
+    const globalActions = extractActionsFromElement(listActions);
+    // Merge: item actions first, then list actions (in a separate section)
+    if (globalActions.length > 0 && itemActions.length > 0) {
+      const merged = [...itemActions];
+      for (const ga of globalActions) {
+        merged.push({ ...ga, sectionTitle: ga.sectionTitle || 'General' });
+      }
+      return merged;
+    }
+    return itemActions.length > 0 ? itemActions : globalActions;
+  }, [selectedItem, listActions]);
+
+  const primaryAction = selectedActions[0];
+
+  // ── Keyboard handler ───────────────────────────────────────────
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // ⌘K toggles action panel
+    if (e.key === 'k' && e.metaKey) {
+      e.preventDefault();
+      setShowActions(prev => !prev);
+      return;
+    }
+    if (showActions) return; // Let the overlay handle keys
+
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); setSelectedIdx(p => Math.min(p + 1, filteredItems.length - 1)); break;
+      case 'ArrowUp': e.preventDefault(); setSelectedIdx(p => Math.max(p - 1, 0)); break;
+      case 'Enter':
+        e.preventDefault();
+        if (primaryAction) {
+          primaryAction.execute();
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        pop();
+        break;
+    }
+  }, [filteredItems.length, selectedIdx, pop, primaryAction, showActions]);
+
+  // ── Scroll selected into view ──────────────────────────────────
+  useEffect(() => {
+    listRef.current?.querySelector(`[data-idx="${selectedIdx}"]`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedIdx]);
 
+  // Focus input
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Notify selection change
@@ -920,71 +1281,135 @@ function ListComponent({
     if (onSelectionChange && filteredItems[selectedIdx]) {
       onSelectionChange(filteredItems[selectedIdx]?.props?.id || null);
     }
-  }, [selectedIdx]);
+  }, [selectedIdx, onSelectionChange, filteredItems]);
 
-  // Get the detail element of the selected item
-  const selectedItem = filteredItems[selectedIdx];
+  // ── Group items by section ─────────────────────────────────────
+  const groupedItems = useMemo(() => {
+    const groups: { title?: string; items: { item: ItemRegistration; globalIdx: number }[] }[] = [];
+    let globalIdx = 0;
+    let curSection: string | undefined | null = null;
+
+    for (const item of filteredItems) {
+      if (item.sectionTitle !== curSection || groups.length === 0) {
+        curSection = item.sectionTitle;
+        groups.push({ title: item.sectionTitle, items: [] });
+      }
+      groups[groups.length - 1].items.push({ item, globalIdx: globalIdx++ });
+    }
+    return groups;
+  }, [filteredItems]);
+
+  // ── Detail panel ───────────────────────────────────────────────
   const detailElement = selectedItem?.props?.detail;
 
-  // Render the list content
+  // ── Execute action and close panel ─────────────────────────────
+  const handleActionExecute = useCallback((action: ExtractedAction) => {
+    setShowActions(false);
+    action.execute();
+  }, []);
+
+  // ── Render ─────────────────────────────────────────────────────
+
   const listContent = (
-    <div ref={listRef} className="flex-1 overflow-y-auto p-1.5" style={{ background: 'rgba(10,10,12,0.5)' }}>
+    <div ref={listRef} className="flex-1 overflow-y-auto py-1" style={{ background: 'rgba(10,10,12,0.5)' }}>
       {isLoading && filteredItems.length === 0 ? (
         <div className="flex items-center justify-center h-full text-white/50"><p className="text-sm">Loading…</p></div>
       ) : filteredItems.length === 0 ? (
         <div className="flex items-center justify-center h-full text-white/40"><p className="text-sm">No results</p></div>
       ) : (
-        <div className="space-y-0.5">
-          {filteredItems.map((item, idx) => (
-            <ListItemRenderer
-              key={item.props.id || `${item.props.title}-${idx}`}
-              {...item.props}
-              isSelected={idx === selectedIdx}
-              dataIdx={idx}
-              onSelect={() => setSelectedIdx(idx)}
-              onActivate={() => executePrimaryAction(item)}
-            />
-          ))}
-        </div>
+        groupedItems.map((group, gi) => (
+          <div key={gi} className="mb-0.5">
+            {group.title && (
+              <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-white/25 font-medium select-none">{group.title}</div>
+            )}
+            {group.items.map(({ item, globalIdx }) => (
+              <ListItemRenderer
+                key={item.id}
+                {...item.props}
+                isSelected={globalIdx === selectedIdx}
+                dataIdx={globalIdx}
+                onSelect={() => setSelectedIdx(globalIdx)}
+                onActivate={() => primaryAction?.execute()}
+              />
+            ))}
+          </div>
+        ))
       )}
     </div>
   );
 
-  // Render detail panel when isShowingDetail is true
   const detailPanel = isShowingDetail && detailElement ? (
     <div className="flex-1 border-l border-white/[0.06] overflow-y-auto" style={{ background: 'rgba(10,10,12,0.5)' }}>
-      <div className="p-4">
-        {detailElement}
-      </div>
+      <div className="p-4">{detailElement}</div>
     </div>
   ) : null;
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
-        <svg className="w-4 h-4 text-white/30 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
-        <input
-          ref={inputRef} type="text" placeholder={searchBarPlaceholder || 'Search…'} value={searchText}
-          onChange={(e) => handleSearchChange(e.target.value)} onKeyDown={handleKeyDown}
-          className="flex-1 bg-transparent border-none outline-none text-white/90 placeholder-white/30 text-base font-light" autoFocus
-        />
-      </div>
-      {isShowingDetail ? (
-        <div className="flex flex-1 overflow-hidden">
-          <div className="w-1/3 flex flex-col overflow-hidden">
-            {listContent}
-          </div>
-          {detailPanel}
+    <ListRegistryContext.Provider value={registryAPI}>
+      {/* Hidden render area — children mount here and register items via context */}
+      <div style={{ display: 'none' }}>{children}</div>
+
+      <div className="flex flex-col h-full" onKeyDown={handleKeyDown}>
+        {/* ── Search bar ──────────────────────────────────────── */}
+        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-white/[0.06]">
+          <button onClick={pop} className="text-white/30 hover:text-white/60 transition-colors flex-shrink-0 p-0.5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          </button>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={searchBarPlaceholder || 'Search…'}
+            value={searchText}
+            onChange={e => handleSearchChange(e.target.value)}
+            className="flex-1 bg-transparent border-none outline-none text-white/90 placeholder-white/30 text-[15px] font-light"
+            autoFocus
+          />
+          {searchBarAccessory && (
+            <div className="flex-shrink-0">{searchBarAccessory}</div>
+          )}
         </div>
-      ) : (
-        listContent
-      )}
-      <div className="px-3 py-1.5 border-t border-white/[0.05] text-white/20 text-[11px]">
-        {filteredItems.length} items{isLoading ? ' • Loading…' : ''}
+
+        {/* ── Main content ────────────────────────────────────── */}
+        {isShowingDetail ? (
+          <div className="flex flex-1 overflow-hidden">
+            <div className="w-1/3 flex flex-col overflow-hidden">{listContent}</div>
+            {detailPanel}
+          </div>
+        ) : (
+          listContent
+        )}
+
+        {/* ── Footer ──────────────────────────────────────────── */}
+        <div className="flex items-center px-3 py-1.5 border-t border-white/[0.06]" style={{ background: 'rgba(20,20,24,0.8)' }}>
+          <div className="flex items-center gap-2 text-white/30 text-[11px] flex-1 min-w-0">
+            <span className="truncate">{navigationTitle || _extensionContext.extensionName || 'Extension'}</span>
+          </div>
+          {primaryAction && (
+            <div className="flex items-center gap-1.5 mr-3">
+              <span className="text-white/50 text-[11px]">{primaryAction.title}</span>
+              <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">↩</kbd>
+            </div>
+          )}
+          <button
+            onClick={() => setShowActions(true)}
+            className="flex items-center gap-1.5 text-white/40 hover:text-white/60 transition-colors"
+          >
+            <span className="text-[11px]">Actions</span>
+            <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">⌘</kbd>
+            <kbd className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-white/[0.06] text-[10px] text-white/30 font-medium">K</kbd>
+          </button>
+        </div>
       </div>
-    </div>
+
+      {/* ── Action Panel Overlay ──────────────────────────────── */}
+      {showActions && selectedActions.length > 0 && (
+        <ActionPanelOverlay
+          actions={selectedActions}
+          onClose={() => setShowActions(false)}
+          onExecute={handleActionExecute}
+        />
+      )}
+    </ListRegistryContext.Provider>
   );
 }
 
@@ -1378,56 +1803,8 @@ export const MenuBarExtra = Object.assign(MenuBarExtraComponent, {
 // ─── Helpers (internal) ─────────────────────────────────────────────
 // =====================================================================
 
-function flattenListItems(children: React.ReactNode): React.ReactElement<ListItemProps>[] {
-  const items: React.ReactElement<ListItemProps>[] = [];
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
-    if (child.type === ListItemComponent || (child.type as any)?.displayName === 'ListItem') {
-      items.push(child as React.ReactElement<ListItemProps>);
-      return;
-    }
-    if (child.props && (child.props as any).children) {
-      items.push(...flattenListItems((child.props as any).children));
-    }
-  });
-  return items;
-}
-
-function executePrimaryAction(item: React.ReactElement<ListItemProps>) {
-  const actionsElement = item.props.actions;
-  if (!actionsElement) return;
-
-  const actions: React.ReactElement[] = [];
-  React.Children.forEach((actionsElement.props as any)?.children, (child) => {
-    if (React.isValidElement(child)) {
-      if ((child.props as any)?.children) {
-        React.Children.forEach((child.props as any).children, (subChild) => {
-          if (React.isValidElement(subChild)) actions.push(subChild);
-        });
-      } else {
-        actions.push(child);
-      }
-    }
-  });
-
-  if (actions.length === 0) return;
-  const primary = actions[0];
-  const props = primary.props as any;
-
-  if (props.onAction) {
-    props.onAction();
-  } else if (props.onSubmit) {
-    props.onSubmit({});
-  } else if (props.content !== undefined) {
-    Clipboard.copy(String(props.content));
-  } else if (props.url) {
-    (window as any).electron?.openUrl?.(props.url);
-  } else if (props.target && React.isValidElement(props.target)) {
-    // Action.Push — use global navigation ref
-    const nav = getGlobalNavigation();
-    nav.push(props.target);
-  }
-}
+// executePrimaryAction is now handled by extractActionsFromElement + ActionPanelOverlay
+// No legacy helpers needed.
 
 // =====================================================================
 // ─── @raycast/utils — Hooks & Utilities ─────────────────────────────
@@ -1734,7 +2111,7 @@ export function useCachedPromise<T>(
               return [...prevArr, ...newArr];
             });
           }
-          opts?.onData?.(innerResult.data);
+          opts?.onData?.((innerResult as any).data);
         } else {
           // Non-paginated result from inner function
           setAccumulatedData(innerResult as any);
