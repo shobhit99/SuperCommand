@@ -14,6 +14,7 @@ export interface CommandInfo {
 export interface ExtensionBundle {
   code: string;
   title: string;
+  mode: string; // 'view' | 'no-view' | 'menu-bar'
   extName: string;
   cmdName: string;
 }

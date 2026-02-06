@@ -377,7 +377,13 @@ app.whenReady().then(() => {
     async (_event: any, extName: string, cmdName: string) => {
       const result = await getExtensionBundle(extName, cmdName);
       if (!result) return null;
-      return { code: result.code, title: result.title, extName, cmdName };
+      return {
+        code: result.code,
+        title: result.title,
+        mode: result.mode,
+        extName,
+        cmdName,
+      };
     }
   );
 

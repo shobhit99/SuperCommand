@@ -19,6 +19,7 @@ import * as RaycastUtils from './raycast-api';
 interface ExtensionViewProps {
   code: string;
   title: string;
+  mode: string;
   onClose: () => void;
 }
 
@@ -57,12 +58,189 @@ class ExtensionErrorBoundary extends React.Component<
   }
 }
 
+// ─── Node.js built-in stubs ─────────────────────────────────────────
+// Raycast extensions run in Node.js; we run them in the renderer.
+// Provide lightweight stubs so the code doesn't crash on import.
+
+const noop = () => {};
+const noopAsync = () => Promise.resolve();
+const noopCb = (...args: any[]) => {
+  const cb = args[args.length - 1];
+  if (typeof cb === 'function') cb(null);
+};
+
+const fsStub = {
+  existsSync: () => false,
+  readFileSync: () => '',
+  writeFileSync: noop,
+  mkdirSync: noop,
+  readdirSync: () => [],
+  statSync: () => ({ isFile: () => false, isDirectory: () => false, mtime: new Date() }),
+  unlinkSync: noop,
+  rmdirSync: noop,
+  rmSync: noop,
+  readFile: noopCb,
+  writeFile: noopCb,
+  mkdir: noopCb,
+  access: noopCb,
+  promises: {
+    readFile: noopAsync,
+    writeFile: noopAsync,
+    mkdir: noopAsync,
+    readdir: () => Promise.resolve([]),
+    stat: () => Promise.resolve({ isFile: () => false, isDirectory: () => false }),
+    access: noopAsync,
+    unlink: noopAsync,
+    rm: noopAsync,
+  },
+};
+
+const pathStub = {
+  join: (...parts: string[]) => parts.filter(Boolean).join('/'),
+  resolve: (...parts: string[]) => parts.filter(Boolean).join('/'),
+  dirname: (p: string) => p.split('/').slice(0, -1).join('/'),
+  basename: (p: string, ext?: string) => {
+    const base = p.split('/').pop() || '';
+    return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+  },
+  extname: (p: string) => { const m = p.match(/\.[^./]+$/); return m ? m[0] : ''; },
+  sep: '/',
+  parse: (p: string) => ({ dir: '', root: '', base: p, name: p, ext: '' }),
+  isAbsolute: (p: string) => p.startsWith('/'),
+  normalize: (p: string) => p,
+  relative: () => '',
+};
+
+const osStub = {
+  homedir: () => '/tmp',
+  tmpdir: () => '/tmp',
+  platform: () => 'darwin',
+  type: () => 'Darwin',
+  hostname: () => 'localhost',
+  cpus: () => [],
+  totalmem: () => 0,
+  freemem: () => 0,
+  EOL: '\n',
+};
+
+const cryptoStub = {
+  randomUUID: () => crypto.randomUUID?.() || Math.random().toString(36).slice(2),
+  createHash: () => ({
+    update: () => ({ digest: () => Math.random().toString(36).slice(2) }),
+  }),
+  randomBytes: (n: number) => new Uint8Array(n),
+};
+
+const eventsStub = {
+  EventEmitter: class EventEmitter {
+    on() { return this; }
+    off() { return this; }
+    once() { return this; }
+    emit() { return false; }
+    addListener() { return this; }
+    removeListener() { return this; }
+    removeAllListeners() { return this; }
+  },
+  default: undefined as any,
+};
+eventsStub.default = eventsStub.EventEmitter;
+
+const childProcessStub = {
+  exec: noopCb,
+  execSync: () => Buffer.from(''),
+  spawn: () => ({
+    on: noop, stdout: { on: noop }, stderr: { on: noop }, kill: noop,
+  }),
+};
+
+const timersPromisesStub = {
+  setTimeout: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  setInterval: noop,
+  setImmediate: () => Promise.resolve(),
+};
+
+const bufferStub = {
+  Buffer: {
+    from: (s: any) => (typeof s === 'string' ? new TextEncoder().encode(s) : new Uint8Array()),
+    alloc: (n: number) => new Uint8Array(n),
+    isBuffer: () => false,
+    concat: () => new Uint8Array(),
+  },
+};
+
+const utilStub = {
+  promisify: (fn: any) => fn,
+  format: (...args: any[]) => args.join(' '),
+  inspect: (o: any) => JSON.stringify(o),
+  TextDecoder,
+  TextEncoder,
+};
+
+const nodeBuiltinStubs: Record<string, any> = {
+  fs: fsStub,
+  'fs/promises': fsStub.promises,
+  path: pathStub,
+  os: osStub,
+  crypto: cryptoStub,
+  events: eventsStub,
+  child_process: childProcessStub,
+  timers: { setTimeout: globalThis.setTimeout, setInterval: globalThis.setInterval, clearTimeout: globalThis.clearTimeout, clearInterval: globalThis.clearInterval },
+  'timers/promises': timersPromisesStub,
+  buffer: bufferStub,
+  util: utilStub,
+  stream: { Readable: class {}, Writable: class {}, Transform: class {}, PassThrough: class {} },
+  'stream/promises': {},
+  url: { URL: globalThis.URL, URLSearchParams: globalThis.URLSearchParams, parse: (u: string) => new URL(u) },
+  querystring: { parse: (s: string) => Object.fromEntries(new URLSearchParams(s)), stringify: (o: any) => new URLSearchParams(o).toString() },
+  http: { request: noop, get: noop },
+  https: { request: noop, get: noop },
+  assert: (v: any) => { if (!v) throw new Error('Assertion failed'); },
+  net: {},
+  tls: {},
+  dns: {},
+  dgram: {},
+  cluster: {},
+  tty: { isatty: () => false },
+  v8: {},
+  vm: {},
+  worker_threads: {},
+  zlib: {},
+  module: { createRequire: () => () => ({}) },
+  readline: {},
+  perf_hooks: { performance: globalThis.performance },
+  string_decoder: { StringDecoder: class { write(b: any) { return String(b); } end() { return ''; } } },
+  process: { env: {}, cwd: () => '/', platform: 'darwin', version: 'v18.0.0', argv: [], exit: noop, on: noop, nextTick: (fn: () => void) => Promise.resolve().then(fn) },
+};
+
+// Also map node: prefixed versions
+for (const [key, val] of Object.entries({ ...nodeBuiltinStubs })) {
+  nodeBuiltinStubs[`node:${key}`] = val;
+}
+
+// ─── Inject globals that extensions expect ──────────────────────────
+
+function ensureGlobals() {
+  if (!(globalThis as any).process) {
+    (globalThis as any).process = nodeBuiltinStubs.process;
+  }
+  if (!(globalThis as any).Buffer) {
+    (globalThis as any).Buffer = bufferStub.Buffer;
+  }
+  if (!(globalThis as any).global) {
+    (globalThis as any).global = globalThis;
+  }
+}
+
 /**
- * Execute extension code and extract the default export (React component).
+ * Execute extension code and extract the default export.
+ * Returns either a React component or a raw function (for no-view commands).
  */
-function loadExtensionComponent(
+function loadExtensionExport(
   code: string
-): React.ComponentType<any> | null {
+): Function | null {
+  // Make sure Node globals are available
+  ensureGlobals();
+
   try {
     const moduleExports: any = {};
     const fakeModule = { exports: moduleExports };
@@ -79,6 +257,10 @@ function loadExtensionComponent(
         case '@raycast/utils':
           return RaycastUtils;
         default:
+          // Check Node.js built-in stubs
+          if (name in nodeBuiltinStubs) {
+            return nodeBuiltinStubs[name];
+          }
           // Return an empty module for unknown deps
           console.warn(
             `Extension tried to require unknown module: "${name}"`
@@ -100,14 +282,14 @@ function loadExtensionComponent(
     fn(moduleExports, fakeRequire, fakeModule, '', '');
 
     // Get the default export
-    const Component =
+    const exported =
       fakeModule.exports.default || fakeModule.exports;
 
-    if (typeof Component === 'function') {
-      return Component;
+    if (typeof exported === 'function') {
+      return exported;
     }
 
-    console.error('Extension did not export a React component');
+    console.error('Extension did not export a function');
     return null;
   } catch (e) {
     console.error('Failed to load extension:', e);
@@ -115,16 +297,123 @@ function loadExtensionComponent(
   }
 }
 
+/**
+ * Wrapper component for "no-view" commands (async functions that
+ * don't return JSX). Executes the function, shows brief feedback, then closes.
+ */
+const NoViewRunner: React.FC<{
+  fn: Function;
+  title: string;
+  onClose: () => void;
+}> = ({ fn, title, onClose }) => {
+  const [status, setStatus] = useState<'running' | 'done' | 'error'>('running');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        await fn();
+        if (!cancelled) {
+          setStatus('done');
+          setTimeout(() => onClose(), 600);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setStatus('error');
+          setErrorMsg(e?.message || 'Command failed');
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fn, onClose]);
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-3">
+      {status === 'running' && (
+        <>
+          <div className="w-5 h-5 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
+          <p className="text-sm text-white/50">Running {title}…</p>
+        </>
+      )}
+      {status === 'done' && (
+        <p className="text-sm text-green-400/80">✓ Done</p>
+      )}
+      {status === 'error' && (
+        <div className="text-center px-6">
+          <AlertTriangle className="w-6 h-6 text-red-400/60 mx-auto mb-2" />
+          <p className="text-sm text-red-400/80">{errorMsg}</p>
+          <button
+            onClick={onClose}
+            className="mt-3 text-xs text-white/40 hover:text-white/70 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Wrapper component that safely renders a view command.
+ * If the component returns a Promise instead of JSX, catches it gracefully.
+ */
+const SafeViewRenderer: React.FC<{
+  Component: Function;
+  onNoView: () => void;
+}> = ({ Component, onNoView }) => {
+  const [fallback, setFallback] = useState(false);
+
+  // Try calling the function — if it returns a Promise, it's no-view
+  const element = useMemo(() => {
+    try {
+      const result = (Component as any)();
+      if (result && typeof result.then === 'function') {
+        // It's an async function / Promise — not a view command
+        return null;
+      }
+      return result;
+    } catch {
+      return undefined; // Let React render <Component /> normally
+    }
+  }, [Component]);
+
+  useEffect(() => {
+    if (element === null) {
+      // Detected async/no-view — switch mode
+      onNoView();
+    }
+  }, [element, onNoView]);
+
+  if (element === null || fallback) return null;
+
+  // If we got a valid React element back, render it
+  if (React.isValidElement(element)) {
+    return element;
+  }
+
+  // Otherwise let React handle it normally as a component
+  return <Component />;
+};
+
 const ExtensionView: React.FC<ExtensionViewProps> = ({
   code,
   title,
+  mode,
   onClose,
 }) => {
   const [error, setError] = useState<string | null>(null);
   const [navStack, setNavStack] = useState<React.ReactElement[]>([]);
+  const [detectedNoView, setDetectedNoView] = useState(false);
 
-  // Load the extension component
-  const ExtComponent = useMemo(() => loadExtensionComponent(code), [code]);
+  // Load the extension's default export
+  const ExtExport = useMemo(() => loadExtensionExport(code), [code]);
+
+  // Is this a no-view command?
+  const isNoView = mode === 'no-view' || mode === 'menu-bar' || detectedNoView;
 
   // Navigation context
   const push = useCallback((element: React.ReactElement) => {
@@ -182,7 +471,7 @@ const ExtensionView: React.FC<ExtensionViewProps> = ({
     );
   }
 
-  if (!ExtComponent) {
+  if (!ExtExport) {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06]">
@@ -203,14 +492,28 @@ const ExtensionView: React.FC<ExtensionViewProps> = ({
     );
   }
 
-  // Determine what to render: top of nav stack or the root component
+  // ─── No-view command: execute the function directly ───────────
+  if (isNoView) {
+    return (
+      <div className="flex flex-col h-full">
+        <NoViewRunner fn={ExtExport} title={title} onClose={onClose} />
+      </div>
+    );
+  }
+
+  // ─── View command: render as React component ──────────────────
   const currentView =
     navStack.length > 0 ? navStack[navStack.length - 1] : null;
 
   return (
     <NavigationContext.Provider value={navValue}>
       <ExtensionErrorBoundary onError={(e) => setError(e.message)}>
-        {currentView || <ExtComponent />}
+        {currentView || (
+          <SafeViewRenderer
+            Component={ExtExport}
+            onNoView={() => setDetectedNoView(true)}
+          />
+        )}
       </ExtensionErrorBoundary>
     </NavigationContext.Provider>
   );

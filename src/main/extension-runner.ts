@@ -147,6 +147,39 @@ function resolveEntryFile(extPath: string, cmdName: string): string | null {
 }
 
 /**
+ * Ensure the extension's npm dependencies are installed.
+ */
+async function ensureDepsInstalled(extPath: string): Promise<void> {
+  const nodeModules = path.join(extPath, 'node_modules');
+  const pkgPath = path.join(extPath, 'package.json');
+
+  if (fs.existsSync(nodeModules)) return; // already installed
+  if (!fs.existsSync(pkgPath)) return;
+
+  // Check if the extension actually has dependencies
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const hasDeps =
+      (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) ||
+      (pkg.devDependencies && Object.keys(pkg.devDependencies).length > 0);
+    if (!hasDeps) return;
+  } catch {
+    return;
+  }
+
+  console.log(`Installing dependencies for extension at ${extPath}…`);
+  try {
+    await execAsync('npm install --production --ignore-scripts 2>&1', {
+      cwd: extPath,
+      timeout: 120_000,
+    });
+    console.log(`Dependencies installed for ${extPath}`);
+  } catch (e) {
+    console.error(`Failed to install deps for ${extPath}:`, e);
+  }
+}
+
+/**
  * Build an extension command using esbuild and return the JS bundle.
  * Returns null on failure.
  */
@@ -156,6 +189,9 @@ export async function buildExtensionCommand(
 ): Promise<string | null> {
   const extPath = path.join(getExtensionsDir(), extName);
   if (!fs.existsSync(extPath)) return null;
+
+  // Install third-party dependencies if missing
+  await ensureDepsInstalled(extPath);
 
   const entryFile = resolveEntryFile(extPath, cmdName);
   if (!entryFile) {
@@ -182,25 +218,62 @@ export async function buildExtensionCommand(
     // Use esbuild programmatic API
     const esbuild = require('esbuild');
 
+    // Node.js built-in modules — must be external since we run in the renderer.
+    // We provide runtime stubs via fakeRequire in ExtensionView.
+    const nodeBuiltins = [
+      'assert', 'buffer', 'child_process', 'cluster', 'crypto',
+      'dgram', 'dns', 'events', 'fs', 'fs/promises', 'http',
+      'http2', 'https', 'module', 'net', 'os', 'path',
+      'perf_hooks', 'process', 'querystring', 'readline',
+      'stream', 'stream/promises', 'string_decoder', 'timers',
+      'timers/promises', 'tls', 'tty', 'url', 'util', 'v8',
+      'vm', 'worker_threads', 'zlib',
+      'node:assert', 'node:buffer', 'node:child_process',
+      'node:crypto', 'node:events', 'node:fs', 'node:fs/promises',
+      'node:http', 'node:https', 'node:module', 'node:net',
+      'node:os', 'node:path', 'node:process', 'node:querystring',
+      'node:stream', 'node:timers', 'node:timers/promises',
+      'node:url', 'node:util', 'node:vm', 'node:worker_threads',
+      'node:zlib',
+    ];
+
+    // Also resolve the extension's own node_modules for third-party deps
+    const extNodeModules = path.join(extPath, 'node_modules');
+
     await esbuild.build({
       entryPoints: [entryFile],
       bundle: true,
       format: 'cjs',
-      platform: 'browser',
+      platform: 'neutral',
       outfile: outFile,
       external: [
         'react',
         'react-dom',
+        'react/jsx-runtime',
         '@raycast/api',
         '@raycast/utils',
+        ...nodeBuiltins,
       ],
+      nodePaths: fs.existsSync(extNodeModules) ? [extNodeModules] : [],
       target: 'es2020',
       jsx: 'automatic',
       jsxImportSource: 'react',
+      // Override the extension's own tsconfig to avoid unsupported targets
+      tsconfigRaw: JSON.stringify({
+        compilerOptions: {
+          target: 'ES2020',
+          jsx: 'react-jsx',
+          jsxImportSource: 'react',
+          strict: false,
+          esModuleInterop: true,
+          moduleResolution: 'node',
+        },
+      }),
       define: {
         'process.env.NODE_ENV': '"production"',
+        'global': 'globalThis',
       },
-      logLevel: 'silent',
+      logLevel: 'warning',
     });
 
     if (fs.existsSync(outFile)) {
@@ -219,19 +292,21 @@ export async function buildExtensionCommand(
 export async function getExtensionBundle(
   extName: string,
   cmdName: string
-): Promise<{ code: string; title: string } | null> {
+): Promise<{ code: string; title: string; mode: string } | null> {
   const code = await buildExtensionCommand(extName, cmdName);
   if (!code) return null;
 
-  // Read command title from package.json
+  // Read command title + mode from package.json
   let title = cmdName;
+  let mode = 'view';
   try {
     const pkgPath = path.join(getExtensionsDir(), extName, 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
     const cmd = (pkg.commands || []).find((c: any) => c.name === cmdName);
     if (cmd?.title) title = cmd.title;
+    if (cmd?.mode) mode = cmd.mode;
   } catch {}
 
-  return { code, title };
+  return { code, title, mode };
 }
 

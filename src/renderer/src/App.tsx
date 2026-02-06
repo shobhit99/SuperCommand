@@ -197,6 +197,7 @@ const App: React.FC = () => {
           <ExtensionView
             code={extensionView.code}
             title={extensionView.title}
+            mode={extensionView.mode}
             onClose={() => {
               setExtensionView(null);
               setSearchQuery('');
