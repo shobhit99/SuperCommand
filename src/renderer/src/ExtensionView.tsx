@@ -11,6 +11,7 @@
 import * as React from 'react';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import * as ReactDOM from 'react-dom';
+import * as JsxRuntime from 'react/jsx-runtime';
 import { ArrowLeft, AlertTriangle } from 'lucide-react';
 import * as RaycastAPI from './raycast-api';
 import { NavigationContext, setExtensionContext, setGlobalNavigation, ExtensionContextType } from './raycast-api';
@@ -18,91 +19,23 @@ import { NavigationContext, setExtensionContext, setGlobalNavigation, ExtensionC
 // Also import @raycast/utils stubs from our shim
 import * as RaycastUtils from './raycast-api';
 
-// ─── React for Extensions ───────────────────────────────────────────
+// ─── React Module for Extensions ────────────────────────────────────
 // Extensions MUST use the exact same React instance as the host app.
 //
-// IMPORTANT: Vite creates a namespace wrapper around React imports.
-// We need to provide extensions with an object that has the same
-// internal references as what ReactDOM uses.
-//
-// We create a plain object with direct references to avoid any
-// proxy/getter issues that might break React's internal state sharing.
+// IMPORTANT: Vite creates an ESM namespace object for `import * as React`.
+// This namespace object might not behave correctly when accessed from CJS code.
+// We create a plain object with all React exports to ensure compatibility.
 
-const ReactForExtensions = {
-  // All hooks - must be the exact same function references
-  useState: React.useState,
-  useEffect: React.useEffect,
-  useContext: React.useContext,
-  useReducer: React.useReducer,
-  useCallback: React.useCallback,
-  useMemo: React.useMemo,
-  useRef: React.useRef,
-  useLayoutEffect: React.useLayoutEffect,
-  useImperativeHandle: React.useImperativeHandle,
-  useDebugValue: React.useDebugValue,
-  useDeferredValue: (React as any).useDeferredValue,
-  useTransition: (React as any).useTransition,
-  useId: (React as any).useId,
-  useSyncExternalStore: (React as any).useSyncExternalStore,
-  useInsertionEffect: (React as any).useInsertionEffect,
-  // Core React APIs
-  createElement: React.createElement,
-  createContext: React.createContext,
-  createRef: React.createRef,
-  forwardRef: React.forwardRef,
-  memo: React.memo,
-  lazy: React.lazy,
-  Suspense: React.Suspense,
-  Fragment: React.Fragment,
-  StrictMode: React.StrictMode,
-  Component: React.Component,
-  PureComponent: React.PureComponent,
-  Children: React.Children,
-  cloneElement: React.cloneElement,
-  isValidElement: React.isValidElement,
-  version: React.version,
-  startTransition: (React as any).startTransition,
-  // CRITICAL: React internals - must be the same object reference
-  // that ReactDOM uses for the dispatcher
-  __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
-};
+// Create React module for extensions
+// We simply return the actual React import - no copying, no wrapping
+// This ensures extensions get the exact same React that the host uses
+console.log('[React] Setting up React for extensions');
+console.log('[React] React.version:', React.version);
+console.log('[React] React.useState:', typeof React.useState);
 
-// ─── Custom JSX Runtime ─────────────────────────────────────────────
-// We create custom jsx/jsxs functions that explicitly use OUR React.createElement
-// to avoid any possibility of using a different React instance.
-
-function customJsx(type: any, config: any, maybeKey?: any): any {
-  const { children, ...props } = config || {};
-  if (maybeKey !== undefined) {
-    props.key = maybeKey;
-  }
-  if (children !== undefined) {
-    if (Array.isArray(children)) {
-      return React.createElement(type, props, ...children);
-    }
-    return React.createElement(type, props, children);
-  }
-  return React.createElement(type, props);
-}
-
-function customJsxs(type: any, config: any, maybeKey?: any): any {
-  // jsxs is used for elements with static children (multiple children)
-  const { children, ...props } = config || {};
-  if (maybeKey !== undefined) {
-    props.key = maybeKey;
-  }
-  if (Array.isArray(children)) {
-    return React.createElement(type, props, ...children);
-  }
-  return React.createElement(type, props, children);
-}
-
-const JsxRuntimeForExtensions = {
-  jsx: customJsx,
-  jsxs: customJsxs,
-  jsxDEV: customJsx,
-  Fragment: React.Fragment,
-};
+// ─── JSX Runtime for Extensions ─────────────────────────────────────
+// We use the actual jsx-runtime import to ensure full compatibility.
+// The JsxRuntime is imported at the top as `import * as JsxRuntime from 'react/jsx-runtime'`
 
 // Re-export for external type access
 export type { ExtensionContextType };
@@ -135,21 +68,27 @@ class ExtensionErrorBoundary extends React.Component<
     return { error };
   }
 
-  componentDidCatch(error: Error) {
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[ExtensionErrorBoundary] Caught error:', error.message);
+    console.error('[ExtensionErrorBoundary] Stack:', error.stack);
+    console.error('[ExtensionErrorBoundary] Component stack:', errorInfo.componentStack);
     this.props.onError(error);
   }
 
   render() {
     if (this.state.error) {
       return (
-        <div className="flex flex-col items-center justify-center h-full text-white/50 p-8">
+        <div className="flex flex-col items-center justify-center h-full text-white/50 p-8 overflow-auto">
           <AlertTriangle className="w-8 h-8 text-red-400/60 mb-3" />
           <p className="text-sm text-red-400/80 font-medium mb-1">
             Extension Error
           </p>
-          <p className="text-xs text-white/30 text-center max-w-sm">
+          <p className="text-xs text-white/30 text-center max-w-sm mb-4">
             {this.state.error.message}
           </p>
+          <pre className="text-[10px] text-white/20 text-left max-w-full overflow-x-auto whitespace-pre-wrap">
+            {this.state.error.stack?.split('\n').slice(0, 10).join('\n')}
+          </pre>
         </div>
       );
     }
@@ -1061,26 +1000,45 @@ function loadExtensionExport(
     // This is the critical bridge between extension code and the
     // SuperCommand renderer environment. Every module an extension
     // might `require()` must be handled here.
+    //
+    // IMPORTANT: We track React requires to verify the same instance is always returned.
+    let reactRequireCount = 0;
     const fakeRequire: any = (name: string): any => {
+      // Track all requires for debugging
+      if (name === 'react' || name.startsWith('react/') || name === 'react-dom') {
+        reactRequireCount++;
+        console.log(`[fakeRequire] #${reactRequireCount} require("${name}")`);
+      }
       // ── React & friends ─────────────────────────────────────
       // CRITICAL: Extensions MUST use the same React instance as the host.
       // Using a different React instance causes "Invalid hook call" errors.
+      //
+      // The key insight: React's hooks work by reading from ReactCurrentDispatcher
+      // which is set during render. We MUST return the exact same React module
+      // that ReactDOM uses, otherwise the dispatcher won't be shared.
       switch (name) {
-        case 'react':
-          // Return ReactForExtensions which has direct references to React's functions
-          // This avoids any issues with Vite's namespace wrapper
-          console.log('[fakeRequire] Providing ReactForExtensions');
-          console.log('[fakeRequire] Internals:', ReactForExtensions.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED);
-          return ReactForExtensions;
+        case 'react': {
+          // Return React directly - the exact same module the host uses
+          console.log('[fakeRequire] Providing React directly');
+          (globalThis as any).__SUPERCOMMAND_REACT = React;
+          return React;
+        }
         case 'react-dom':
         case 'react-dom/client':
+          console.log('[fakeRequire] Providing ReactDOM');
+          console.log('[fakeRequire] ReactDOM.createRoot:', (ReactDOM as any).createRoot);
           return ReactDOM;
         case 'react-dom/server':
           return reactDomServerStub;
         case 'react/jsx-runtime':
-        case 'react/jsx-dev-runtime':
-          // Use our custom jsx-runtime that explicitly uses our React.createElement
-          return JsxRuntimeForExtensions;
+        case 'react/jsx-dev-runtime': {
+          // Return the actual jsx-runtime to ensure JSX creates elements
+          // using the same React.createElement
+          console.log('[fakeRequire] Providing jsx-runtime');
+          console.log('[fakeRequire] JsxRuntime.Fragment === React.Fragment:', JsxRuntime.Fragment === React.Fragment);
+          console.log('[fakeRequire] JsxRuntime.Fragment === React.Fragment:', JsxRuntime.Fragment === React.Fragment);
+          return JsxRuntime;
+        }
 
         // ── Raycast API shim ────────────────────────────────────
         case '@raycast/api':
@@ -1193,6 +1151,7 @@ function loadExtensionExport(
     console.log('[loadExtensionExport] Extension loaded successfully');
     console.log('[loadExtensionExport] Exported type:', typeof exported);
     console.log('[loadExtensionExport] Exported name:', exported?.name);
+    console.log('[loadExtensionExport] Exported function:', exported?.toString?.().slice(0, 200));
 
     if (typeof exported === 'function') {
       return exported;
@@ -1275,19 +1234,12 @@ const NoViewRunner: React.FC<{
 
 /**
  * Render a view command as a React component.
- * We trust the `mode` from package.json to determine if it's a view or no-view command.
- * Never call the component function outside React's render cycle — doing so
- * corrupts hook state (e.g. jotai's useAtom) and causes React internal errors.
  */
 const ViewRenderer: React.FC<{ Component: React.FC }> = ({ Component }) => {
-  // Debug: log rendering context
-  console.log('[ViewRenderer] Rendering extension component');
-  console.log('[ViewRenderer] React.version:', React.version);
-  console.log('[ViewRenderer] Dispatcher:', (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher?.current);
-
-  // The extension component is rendered as a child element
-  // React will call Component during reconciliation with dispatcher set
-  return <Component />;
+  // Simple test that hooks work here
+  const [test] = useState('ok');
+  console.log('[ViewRenderer] Hooks work here, rendering extension...');
+  return React.createElement(Component, null);
 };
 
 const ExtensionView: React.FC<ExtensionViewProps> = ({
@@ -1336,7 +1288,10 @@ const ExtensionView: React.FC<ExtensionViewProps> = ({
   }, [code, buildError, extensionName, commandName, assetsPath, supportPath, owner, preferences, mode]);
 
   // Is this a no-view command? Trust the mode from package.json.
-  const isNoView = mode === 'no-view' || mode === 'menu-bar';
+  // NOTE: 'menu-bar' commands ARE React components (they use hooks),
+  // so they should NOT be treated as no-view. Only 'no-view' commands
+  // are simple async functions that can be called directly.
+  const isNoView = mode === 'no-view';
 
   // Navigation context
   const push = useCallback((element: React.ReactElement) => {
